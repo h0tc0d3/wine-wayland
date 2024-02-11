@@ -1,0 +1,84 @@
+From 53094e4f8dc04755cdf7b56107bafd5f99d65f7c Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 26 Jan 2024 16:04:15 +0200
+Subject: [PATCH 07/27] winewayland.drv: Refresh surfaces after display
+ configuration.
+
+Since a display reconfiguration may affect the compositor side scaling
+which we apply to a surface, instruct all surfaces to refresh themselves
+by committing an updated state based on the latest window state.
+---
+ dlls/winewayland.drv/display.c    |  5 +++++
+ dlls/winewayland.drv/waylanddrv.h |  1 +
+ dlls/winewayland.drv/window.c     | 21 +++++++++++++++++++++
+ 3 files changed, 27 insertions(+)
+
+diff --git a/dlls/winewayland.drv/display.c b/dlls/winewayland.drv/display.c
+index eba592a585e5..3eb603540812 100644
+--- a/dlls/winewayland.drv/display.c
++++ b/dlls/winewayland.drv/display.c
+@@ -398,5 +398,10 @@ BOOL WAYLAND_UpdateDisplayDevices(const struct gdi_device_manager *device_manage
+ 
+     pthread_mutex_unlock(&process_wayland.output_mutex);
+ 
++    /* Refresh all windows to ensure they have been committed with proper
++     * scaling applied. */
++    if (process_wayland.initialized)
++        NtUserPostMessage(HWND_BROADCAST, WM_WAYLAND_REFRESH, 0, 0);
++
+     return TRUE;
+ }
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index 6c6df5916975..a1f98e9ed809 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -62,6 +62,7 @@ enum wayland_window_message
+     WM_WAYLAND_INIT_DISPLAY_DEVICES = WM_WINE_FIRST_DRIVER_MSG,
+     WM_WAYLAND_CONFIGURE,
+     WM_WAYLAND_SET_FOREGROUND,
++    WM_WAYLAND_REFRESH,
+ };
+ 
+ enum wayland_surface_config_state
+diff --git a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
+index ae63b66b83e8..6695e3e38308 100644
+--- a/dlls/winewayland.drv/window.c
++++ b/dlls/winewayland.drv/window.c
+@@ -631,6 +631,24 @@ static void wayland_configure_window(HWND hwnd)
+     NtUserSetWindowPos(hwnd, 0, 0, 0, window_width, window_height, flags);
+ }
+ 
++static void wayland_refresh_window(HWND hwnd)
++{
++    struct wayland_win_data *data;
++
++    if (!(data = wayland_win_data_get(hwnd))) return;
++
++    if (data->wayland_surface)
++    {
++        pthread_mutex_lock(&data->wayland_surface->mutex);
++        wayland_win_data_get_config(data, &data->wayland_surface->window);
++        if (wayland_surface_reconfigure(data->wayland_surface))
++            wl_surface_commit(data->wayland_surface->wl_surface);
++        pthread_mutex_unlock(&data->wayland_surface->mutex);
++    }
++
++    wayland_win_data_release(data);
++}
++
+ /**********************************************************************
+  *           WAYLAND_WindowMessage
+  */
+@@ -648,6 +666,9 @@ LRESULT WAYLAND_WindowMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+     case WM_WAYLAND_SET_FOREGROUND:
+         NtUserSetForegroundWindow(hwnd);
+         return 0;
++    case WM_WAYLAND_REFRESH:
++        wayland_refresh_window(hwnd);
++        return 0;
+     default:
+         FIXME("got window msg %x hwnd %p wp %lx lp %lx\n", msg, hwnd, (long)wp, lp);
+         return 0;
+-- 
+2.43.0
+

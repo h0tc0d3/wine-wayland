@@ -1,0 +1,100 @@
+From 54cc8f016536019814da89a872a289b1bd45a5af Mon Sep 17 00:00:00 2001
+From: Grigory Vasilyev <h0tc0d3@gmail.com>
+Date: Sat, 27 Jan 2024 02:32:28 +0300
+Subject: [PATCH 26/27] Fix Battle.net client
+
+---
+ dlls/ntdll/unix/loader.c       |  6 ++++++
+ dlls/ntdll/unix/unix_private.h |  1 +
+ dlls/ntdll/unix/virtual.c      | 18 ++++++++++++++++--
+ 3 files changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index c919b3ba5419..7d8928dcbdd4 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -1895,6 +1895,7 @@ BOOL ac_odyssey;
+ BOOL fsync_simulate_sched_quantum;
+ BOOL alert_simulate_sched_quantum;
+ BOOL fsync_yield_to_waiters;
++BOOL simulate_writecopy;
+ 
+ static void hacks_init(void)
+ {
+@@ -1927,6 +1928,11 @@ static void hacks_init(void)
+ 
+     if (fsync_yield_to_waiters)
+         ERR("HACK: fsync: yield to waiters.\n");
++
++    env_str = getenv("WINE_SIMULATE_WRITECOPY");
++    if (env_str) simulate_writecopy = atoi(env_str);
++    else if (main_argc > 1 && (strstr(main_argv[1], "Battle.net.exe")))
++        simulate_writecopy = TRUE;
+ }
+ 
+ /***********************************************************************
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index d23e5a8b71de..7a734f71c20c 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -181,6 +181,7 @@ extern BOOL ac_odyssey;
+ extern BOOL fsync_simulate_sched_quantum;
+ extern BOOL alert_simulate_sched_quantum;
+ extern BOOL fsync_yield_to_waiters;
++extern BOOL simulate_writecopy;
+ 
+ extern void init_environment(void);
+ extern void init_startup_info(void);
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index b9fcf71f19fb..6138177e51a1 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -122,6 +122,7 @@ struct file_view
+ #define VPROT_GUARD      0x10
+ #define VPROT_COMMITTED  0x20
+ #define VPROT_WRITEWATCH 0x40
++#define VPROT_COPIED     0x80
+ /* per-mapping protection flags */
+ #define VPROT_ARM64EC          0x0100  /* view may contain ARM64EC code */
+ #define VPROT_SYSTEM           0x0200  /* system view (underlying mmap not under our control) */
+@@ -1087,7 +1088,8 @@ static const char *get_prot_str( BYTE prot )
+     buffer[0] = (prot & VPROT_COMMITTED) ? 'c' : '-';
+     buffer[1] = (prot & VPROT_GUARD) ? 'g' : ((prot & VPROT_WRITEWATCH) ? 'H' : '-');
+     buffer[2] = (prot & VPROT_READ) ? 'r' : '-';
+-    buffer[3] = (prot & VPROT_WRITECOPY) ? 'W' : ((prot & VPROT_WRITE) ? 'w' : '-');
++    buffer[3] = (prot & VPROT_WRITECOPY) ? (prot & VPROT_COPIED ? 'w' : 'W')
++        : ((prot & VPROT_WRITE) ? 'w' : '-');
+     buffer[4] = (prot & VPROT_EXEC) ? 'x' : '-';
+     buffer[5] = 0;
+     return buffer;
+@@ -1616,7 +1618,10 @@ static NTSTATUS create_view( struct file_view **view_ret, void *base, size_t siz
+  */
+ static DWORD get_win32_prot( BYTE vprot, unsigned int map_prot )
+ {
+-    DWORD ret = VIRTUAL_Win32Flags[vprot & 0x0f];
++    DWORD ret;
++    if ((vprot & (VPROT_COPIED | VPROT_WRITECOPY)) == (VPROT_COPIED | VPROT_WRITECOPY))
++        vprot = (vprot & ~VPROT_WRITECOPY) | VPROT_WRITE;
++    ret = VIRTUAL_Win32Flags[vprot & 0x0f];
+     if (vprot & VPROT_GUARD) ret |= PAGE_GUARD;
+     if (map_prot & SEC_NOCACHE) ret |= PAGE_NOCACHE;
+     return ret;
+@@ -4919,6 +4924,15 @@ NTSTATUS WINAPI NtProtectVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T
+         {
+             old = get_win32_prot( vprot, view->protect );
+             status = set_protection( view, base, size, new_prot );
++            if (simulate_writecopy && status == STATUS_SUCCESS
++                && ((old == PAGE_WRITECOPY || old == PAGE_EXECUTE_WRITECOPY)))
++            {
++                TRACE("Setting VPROT_COPIED.\n");
++
++                set_page_vprot_bits(base, size, VPROT_COPIED, 0);
++                vprot |= VPROT_COPIED;
++                old = get_win32_prot( vprot, view->protect );
++            }
+         }
+         else status = STATUS_NOT_COMMITTED;
+     }
+-- 
+2.43.0
+

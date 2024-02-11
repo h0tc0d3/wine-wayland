@@ -1,0 +1,456 @@
+From dc54b582f15c0c8974e18cf5433ece0335a9cfcb Mon Sep 17 00:00:00 2001
+From: Grigory Vasilyev <h0tc0d3@gmail.com>
+Date: Sat, 20 Jan 2024 00:29:28 +0300
+Subject: [PATCH 27/27] Update configure files
+
+---
+ aclocal.m4   |  12 ++-
+ configure    | 264 +++++++++++++--------------------------------------
+ configure.ac |   6 +-
+ 3 files changed, 72 insertions(+), 210 deletions(-)
+
+diff --git a/aclocal.m4 b/aclocal.m4
+index f9049a445502..afeab438343c 100644
+--- a/aclocal.m4
++++ b/aclocal.m4
+@@ -265,11 +265,13 @@ dnl Usage: WINE_CHECK_DEFINE(name),[action-if-yes,[action-if-no]])
+ dnl
+ AC_DEFUN([WINE_CHECK_DEFINE],
+ [AS_VAR_PUSHDEF([ac_var],[ac_cv_cpp_def_$1])dnl
+-AC_CACHE_CHECK([whether we need to define $1],ac_var,
+-    AC_EGREP_CPP(yes,[#ifndef $1
+-yes
+-#endif],
+-    [AS_VAR_SET(ac_var,yes)],[AS_VAR_SET(ac_var,no)]))
++AC_CACHE_CHECK([whether we need to define $1], ac_var,
++     [AC_PREPROC_IFELSE([[
++#ifndef $1
++#error not defined
++#endif
++]],
++     [AS_VAR_SET(ac_var,no)],[AS_VAR_SET(ac_var,yes)])])
+ AS_VAR_IF([ac_var],[yes],
+       [CFLAGS="$CFLAGS -D$1"
+   LINTFLAGS="$LINTFLAGS -D$1"])dnl
+diff --git a/configure b/configure
+index f90cc084bdea..fffe2421e590 100755
+--- a/configure
++++ b/configure
+@@ -11569,75 +11569,7 @@ then :
+ fi }
+ 
+     case $wine_arch in
+-      i386) { as_ac_var=`printf "%s\n" "ac_cv_${wine_arch}_cflags_-fno-omit-frame-pointer" | $as_tr_sh`
+-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether $CC supports -fno-omit-frame-pointer" >&5
+-printf %s "checking whether $CC supports -fno-omit-frame-pointer... " >&6; }
+-if eval test \${$as_ac_var+y}
+-then :
+-  printf %s "(cached) " >&6
+-else $as_nop
+-  ac_wine_try_cflags_saved=$CFLAGS
+-ac_wine_try_cflags_saved_exeext=$ac_exeext
+-CFLAGS="$CFLAGS -nostdlib -nodefaultlibs -fno-omit-frame-pointer"
+-ac_exeext=".exe"
+-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+-/* end confdefs.h.  */
+-void *__os_arm64x_dispatch_ret = 0;
+-int __cdecl mainCRTStartup(void) { return 0; }
+-_ACEOF
+-if ac_fn_c_try_link "$LINENO"
+-then :
+-  eval "$as_ac_var=yes"
+-else $as_nop
+-  eval "$as_ac_var=no"
+-fi
+-rm -f core conftest.err conftest.$ac_objext conftest.beam \
+-    conftest$ac_exeext conftest.$ac_ext
+-CFLAGS=$ac_wine_try_cflags_saved
+-ac_exeext=$ac_wine_try_cflags_saved_exeext
+-fi
+-eval ac_res=\$$as_ac_var
+-	       { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
+-printf "%s\n" "$ac_res" >&6; }
+-if eval test \"x\$"$as_ac_var"\" = x"yes"
+-then :
+-  as_fn_append ${wine_arch}_EXTRACFLAGS " -fno-omit-frame-pointer"
+-fi }
+-            { as_ac_var=`printf "%s\n" "ac_cv_${wine_arch}_cflags_-mpreferred-stack-boundary=2" | $as_tr_sh`
+-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether $CC supports -mpreferred-stack-boundary=2" >&5
+-printf %s "checking whether $CC supports -mpreferred-stack-boundary=2... " >&6; }
+-if eval test \${$as_ac_var+y}
+-then :
+-  printf %s "(cached) " >&6
+-else $as_nop
+-  ac_wine_try_cflags_saved=$CFLAGS
+-ac_wine_try_cflags_saved_exeext=$ac_exeext
+-CFLAGS="$CFLAGS -nostdlib -nodefaultlibs -mpreferred-stack-boundary=2"
+-ac_exeext=".exe"
+-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+-/* end confdefs.h.  */
+-void *__os_arm64x_dispatch_ret = 0;
+-int __cdecl mainCRTStartup(void) { return 0; }
+-_ACEOF
+-if ac_fn_c_try_link "$LINENO"
+-then :
+-  eval "$as_ac_var=yes"
+-else $as_nop
+-  eval "$as_ac_var=no"
+-fi
+-rm -f core conftest.err conftest.$ac_objext conftest.beam \
+-    conftest$ac_exeext conftest.$ac_ext
+-CFLAGS=$ac_wine_try_cflags_saved
+-ac_exeext=$ac_wine_try_cflags_saved_exeext
+-fi
+-eval ac_res=\$$as_ac_var
+-	       { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
+-printf "%s\n" "$ac_res" >&6; }
+-if eval test \"x\$"$as_ac_var"\" = x"yes"
+-then :
+-  as_fn_append ${wine_arch}_EXTRACFLAGS " -mpreferred-stack-boundary=2"
+-fi }
+-            { as_ac_var=`printf "%s\n" "ac_cv_${wine_arch}_cflags_-Wl,--disable-stdcall-fixup" | $as_tr_sh`
++      i386) { as_ac_var=`printf "%s\n" "ac_cv_${wine_arch}_cflags_-Wl,--disable-stdcall-fixup" | $as_tr_sh`
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether $CC supports -Wl,--disable-stdcall-fixup" >&5
+ printf %s "checking whether $CC supports -Wl,--disable-stdcall-fixup... " >&6; }
+ if eval test \${$as_ac_var+y}
+@@ -11739,74 +11671,6 @@ if eval test \"x\$"$as_ac_var"\" = x"yes"
+ then :
+   as_fn_append ${wine_arch}_EXTRACFLAGS " -Wnonnull"
+ fi }
+-              { as_ac_var=`printf "%s\n" "ac_cv_${wine_arch}_cflags_-mcx16" | $as_tr_sh`
+-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether $CC supports -mcx16" >&5
+-printf %s "checking whether $CC supports -mcx16... " >&6; }
+-if eval test \${$as_ac_var+y}
+-then :
+-  printf %s "(cached) " >&6
+-else $as_nop
+-  ac_wine_try_cflags_saved=$CFLAGS
+-ac_wine_try_cflags_saved_exeext=$ac_exeext
+-CFLAGS="$CFLAGS -nostdlib -nodefaultlibs -mcx16"
+-ac_exeext=".exe"
+-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+-/* end confdefs.h.  */
+-void *__os_arm64x_dispatch_ret = 0;
+-int __cdecl mainCRTStartup(void) { return 0; }
+-_ACEOF
+-if ac_fn_c_try_link "$LINENO"
+-then :
+-  eval "$as_ac_var=yes"
+-else $as_nop
+-  eval "$as_ac_var=no"
+-fi
+-rm -f core conftest.err conftest.$ac_objext conftest.beam \
+-    conftest$ac_exeext conftest.$ac_ext
+-CFLAGS=$ac_wine_try_cflags_saved
+-ac_exeext=$ac_wine_try_cflags_saved_exeext
+-fi
+-eval ac_res=\$$as_ac_var
+-	       { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
+-printf "%s\n" "$ac_res" >&6; }
+-if eval test \"x\$"$as_ac_var"\" = x"yes"
+-then :
+-  as_fn_append ${wine_arch}_EXTRACFLAGS " -mcx16"
+-fi }
+-              { as_ac_var=`printf "%s\n" "ac_cv_${wine_arch}_cflags_-mcmodel=small" | $as_tr_sh`
+-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether $CC supports -mcmodel=small" >&5
+-printf %s "checking whether $CC supports -mcmodel=small... " >&6; }
+-if eval test \${$as_ac_var+y}
+-then :
+-  printf %s "(cached) " >&6
+-else $as_nop
+-  ac_wine_try_cflags_saved=$CFLAGS
+-ac_wine_try_cflags_saved_exeext=$ac_exeext
+-CFLAGS="$CFLAGS -nostdlib -nodefaultlibs -mcmodel=small"
+-ac_exeext=".exe"
+-cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+-/* end confdefs.h.  */
+-void *__os_arm64x_dispatch_ret = 0;
+-int __cdecl mainCRTStartup(void) { return 0; }
+-_ACEOF
+-if ac_fn_c_try_link "$LINENO"
+-then :
+-  eval "$as_ac_var=yes"
+-else $as_nop
+-  eval "$as_ac_var=no"
+-fi
+-rm -f core conftest.err conftest.$ac_objext conftest.beam \
+-    conftest$ac_exeext conftest.$ac_ext
+-CFLAGS=$ac_wine_try_cflags_saved
+-ac_exeext=$ac_wine_try_cflags_saved_exeext
+-fi
+-eval ac_res=\$$as_ac_var
+-	       { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_res" >&5
+-printf "%s\n" "$ac_res" >&6; }
+-if eval test \"x\$"$as_ac_var"\" = x"yes"
+-then :
+-  as_fn_append ${wine_arch}_EXTRACFLAGS " -mcmodel=small"
+-fi } ;;
+     esac
+ 
+         wine_crossdebug=$CROSSDEBUG
+@@ -21379,19 +21243,19 @@ then :
+ else $as_nop
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
++
+ #ifndef __i386__
+-yes
++#error not defined
+ #endif
++
+ _ACEOF
+-if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+-  $EGREP "yes" >/dev/null 2>&1
++if ac_fn_c_try_cpp "$LINENO"
+ then :
+-  ac_cv_cpp_def___i386__=yes
+-else $as_nop
+   ac_cv_cpp_def___i386__=no
++else $as_nop
++  ac_cv_cpp_def___i386__=yes
+ fi
+-rm -rf conftest*
+-
++rm -f conftest.err conftest.i conftest.$ac_ext
+ fi
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cpp_def___i386__" >&5
+ printf "%s\n" "$ac_cv_cpp_def___i386__" >&6; }
+@@ -21408,19 +21272,19 @@ then :
+ else $as_nop
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
++
+ #ifndef __x86_64__
+-yes
++#error not defined
+ #endif
++
+ _ACEOF
+-if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+-  $EGREP "yes" >/dev/null 2>&1
++if ac_fn_c_try_cpp "$LINENO"
+ then :
+-  ac_cv_cpp_def___x86_64__=yes
+-else $as_nop
+   ac_cv_cpp_def___x86_64__=no
++else $as_nop
++  ac_cv_cpp_def___x86_64__=yes
+ fi
+-rm -rf conftest*
+-
++rm -f conftest.err conftest.i conftest.$ac_ext
+ fi
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cpp_def___x86_64__" >&5
+ printf "%s\n" "$ac_cv_cpp_def___x86_64__" >&6; }
+@@ -21437,19 +21301,19 @@ then :
+ else $as_nop
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
++
+ #ifndef __sparc64__
+-yes
++#error not defined
+ #endif
++
+ _ACEOF
+-if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+-  $EGREP "yes" >/dev/null 2>&1
++if ac_fn_c_try_cpp "$LINENO"
+ then :
+-  ac_cv_cpp_def___sparc64__=yes
+-else $as_nop
+   ac_cv_cpp_def___sparc64__=no
++else $as_nop
++  ac_cv_cpp_def___sparc64__=yes
+ fi
+-rm -rf conftest*
+-
++rm -f conftest.err conftest.i conftest.$ac_ext
+ fi
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cpp_def___sparc64__" >&5
+ printf "%s\n" "$ac_cv_cpp_def___sparc64__" >&6; }
+@@ -21466,19 +21330,19 @@ then :
+ else $as_nop
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
++
+ #ifndef __sparc__
+-yes
++#error not defined
+ #endif
++
+ _ACEOF
+-if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+-  $EGREP "yes" >/dev/null 2>&1
++if ac_fn_c_try_cpp "$LINENO"
+ then :
+-  ac_cv_cpp_def___sparc__=yes
+-else $as_nop
+   ac_cv_cpp_def___sparc__=no
++else $as_nop
++  ac_cv_cpp_def___sparc__=yes
+ fi
+-rm -rf conftest*
+-
++rm -f conftest.err conftest.i conftest.$ac_ext
+ fi
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cpp_def___sparc__" >&5
+ printf "%s\n" "$ac_cv_cpp_def___sparc__" >&6; }
+@@ -21495,19 +21359,19 @@ then :
+ else $as_nop
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
++
+ #ifndef __powerpc64__
+-yes
++#error not defined
+ #endif
++
+ _ACEOF
+-if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+-  $EGREP "yes" >/dev/null 2>&1
++if ac_fn_c_try_cpp "$LINENO"
+ then :
+-  ac_cv_cpp_def___powerpc64__=yes
+-else $as_nop
+   ac_cv_cpp_def___powerpc64__=no
++else $as_nop
++  ac_cv_cpp_def___powerpc64__=yes
+ fi
+-rm -rf conftest*
+-
++rm -f conftest.err conftest.i conftest.$ac_ext
+ fi
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cpp_def___powerpc64__" >&5
+ printf "%s\n" "$ac_cv_cpp_def___powerpc64__" >&6; }
+@@ -21524,19 +21388,19 @@ then :
+ else $as_nop
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
++
+ #ifndef __powerpc__
+-yes
++#error not defined
+ #endif
++
+ _ACEOF
+-if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+-  $EGREP "yes" >/dev/null 2>&1
++if ac_fn_c_try_cpp "$LINENO"
+ then :
+-  ac_cv_cpp_def___powerpc__=yes
+-else $as_nop
+   ac_cv_cpp_def___powerpc__=no
++else $as_nop
++  ac_cv_cpp_def___powerpc__=yes
+ fi
+-rm -rf conftest*
+-
++rm -f conftest.err conftest.i conftest.$ac_ext
+ fi
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cpp_def___powerpc__" >&5
+ printf "%s\n" "$ac_cv_cpp_def___powerpc__" >&6; }
+@@ -21553,19 +21417,19 @@ then :
+ else $as_nop
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
++
+ #ifndef __aarch64__
+-yes
++#error not defined
+ #endif
++
+ _ACEOF
+-if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+-  $EGREP "yes" >/dev/null 2>&1
++if ac_fn_c_try_cpp "$LINENO"
+ then :
+-  ac_cv_cpp_def___aarch64__=yes
+-else $as_nop
+   ac_cv_cpp_def___aarch64__=no
++else $as_nop
++  ac_cv_cpp_def___aarch64__=yes
+ fi
+-rm -rf conftest*
+-
++rm -f conftest.err conftest.i conftest.$ac_ext
+ fi
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cpp_def___aarch64__" >&5
+ printf "%s\n" "$ac_cv_cpp_def___aarch64__" >&6; }
+@@ -21582,19 +21446,19 @@ then :
+ else $as_nop
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
++
+ #ifndef __arm__
+-yes
++#error not defined
+ #endif
++
+ _ACEOF
+-if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+-  $EGREP "yes" >/dev/null 2>&1
++if ac_fn_c_try_cpp "$LINENO"
+ then :
+-  ac_cv_cpp_def___arm__=yes
+-else $as_nop
+   ac_cv_cpp_def___arm__=no
++else $as_nop
++  ac_cv_cpp_def___arm__=yes
+ fi
+-rm -rf conftest*
+-
++rm -f conftest.err conftest.i conftest.$ac_ext
+ fi
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cpp_def___arm__" >&5
+ printf "%s\n" "$ac_cv_cpp_def___arm__" >&6; }
+@@ -21614,19 +21478,19 @@ then :
+ else $as_nop
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
++
+ #ifndef __sun__
+-yes
++#error not defined
+ #endif
++
+ _ACEOF
+-if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+-  $EGREP "yes" >/dev/null 2>&1
++if ac_fn_c_try_cpp "$LINENO"
+ then :
+-  ac_cv_cpp_def___sun__=yes
+-else $as_nop
+   ac_cv_cpp_def___sun__=no
++else $as_nop
++  ac_cv_cpp_def___sun__=yes
+ fi
+-rm -rf conftest*
+-
++rm -f conftest.err conftest.i conftest.$ac_ext
+ fi
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: $ac_cv_cpp_def___sun__" >&5
+ printf "%s\n" "$ac_cv_cpp_def___sun__" >&6; }
+diff --git a/configure.ac b/configure.ac
+index 5c74fb3feea4..5f50a271e3e9 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -995,14 +995,10 @@ This is an error since --enable-archs=$wine_arch was requested.])])
+     WINE_TRY_PE_CFLAGS([-Wenum-conversion])
+ 
+     case $wine_arch in
+-      i386) WINE_TRY_PE_CFLAGS([-fno-omit-frame-pointer])
+-            WINE_TRY_PE_CFLAGS([-mpreferred-stack-boundary=2])
+-            WINE_TRY_PE_CFLAGS([-Wl,--disable-stdcall-fixup],
++      i386) WINE_TRY_PE_CFLAGS([-Wl,--disable-stdcall-fixup],
+                                [AS_VAR_APPEND([${wine_arch}_LDFLAGS],[" -Wl,--disable-stdcall-fixup"])]) ;;
+       x86_64) WINE_TRY_PE_CFLAGS([-Wformat-overflow])
+               WINE_TRY_PE_CFLAGS([-Wnonnull])
+-              WINE_TRY_PE_CFLAGS([-mcx16])
+-              WINE_TRY_PE_CFLAGS([-mcmodel=small]) ;;
+     esac
+ 
+     dnl Determine debug info format
+-- 
+2.43.0
+

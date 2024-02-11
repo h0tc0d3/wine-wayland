@@ -1,0 +1,92 @@
+From c496aea3457af585c667bbf4cf13e78e698dba19 Mon Sep 17 00:00:00 2001
+From: Anton Baskanov <baskanov@gmail.com>
+Date: Fri, 9 Feb 2024 14:42:52 +0700
+Subject: [PATCH 10/27] winex11.drv: Process events in
+ X11DRV_GetCurrentDisplaySettings.
+
+We have to invalidate the current mode cache if there are pending
+RRNotify events. The performance hit on EnumDisplaySettingsExW is
+around 15-20%.
+---
+ dlls/user32/tests/monitor.c | 16 ++++++++--------
+ dlls/winex11.drv/display.c  |  2 ++
+ 2 files changed, 10 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/user32/tests/monitor.c b/dlls/user32/tests/monitor.c
+index 5dd7ccb67ba5..601aa81b29b0 100644
+--- a/dlls/user32/tests/monitor.c
++++ b/dlls/user32/tests/monitor.c
+@@ -1242,13 +1242,13 @@ static void test_ChangeDisplaySettingsEx(void)
+     dm.dmPelsWidth = 640;
+     dm.dmPelsHeight = 480;
+     dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+-    expect_dm(&dm, devices[0].name, 0, TRUE);
++    expect_dm(&dm, devices[0].name, 0, FALSE);
+ 
+     SetEvent(event1);
+     wait_result = WaitForSingleObject(info1.hProcess, 10000);
+     ok(wait_result == WAIT_OBJECT_0, "WaitForSingleObject returned %lx.\n", wait_result);
+ 
+-    wait_for_dm(devices[0].name, devices[0].original_mode.dmPelsWidth, devices[0].original_mode.dmPelsHeight, FALSE);
++    wait_for_dm(devices[0].name, devices[0].original_mode.dmPelsWidth, devices[0].original_mode.dmPelsHeight, TRUE);
+ 
+     CloseHandle(info1.hProcess);
+     CloseHandle(info1.hThread);
+@@ -1275,7 +1275,7 @@ static void test_ChangeDisplaySettingsEx(void)
+     wait_result = WaitForSingleObject(info1.hProcess, 10000);
+     ok(wait_result == WAIT_OBJECT_0, "WaitForSingleObject returned %lx.\n", wait_result);
+ 
+-    wait_for_dm(devices[0].name, devices[0].original_mode.dmPelsWidth, devices[0].original_mode.dmPelsHeight, FALSE);
++    wait_for_dm(devices[0].name, devices[0].original_mode.dmPelsWidth, devices[0].original_mode.dmPelsHeight, TRUE);
+ 
+     SetEvent(event0);
+     wait_result = WaitForSingleObject(info0.hProcess, 10000);
+@@ -1283,7 +1283,7 @@ static void test_ChangeDisplaySettingsEx(void)
+ 
+     Sleep(100);
+ 
+-    expect_dm(&devices[0].original_mode, devices[0].name, 0, FALSE);
++    expect_dm(&devices[0].original_mode, devices[0].name, 0, TRUE);
+ 
+     CloseHandle(info1.hProcess);
+     CloseHandle(info1.hThread);
+@@ -1317,8 +1317,8 @@ static void test_ChangeDisplaySettingsEx(void)
+         wait_result = WaitForSingleObject(info1.hProcess, 10000);
+         ok(wait_result == WAIT_OBJECT_0, "WaitForSingleObject returned %lx.\n", wait_result);
+ 
+-        wait_for_dm(devices[0].name, devices[0].original_mode.dmPelsWidth, devices[0].original_mode.dmPelsHeight, FALSE);
+-        wait_for_dm(devices[1].name, devices[1].original_mode.dmPelsWidth, devices[1].original_mode.dmPelsHeight, FALSE);
++        wait_for_dm(devices[0].name, devices[0].original_mode.dmPelsWidth, devices[0].original_mode.dmPelsHeight, TRUE);
++        wait_for_dm(devices[1].name, devices[1].original_mode.dmPelsWidth, devices[1].original_mode.dmPelsHeight, TRUE);
+ 
+         SetEvent(event0);
+         wait_result = WaitForSingleObject(info0.hProcess, 10000);
+@@ -1328,10 +1328,10 @@ static void test_ChangeDisplaySettingsEx(void)
+ 
+         dm = devices[0].original_mode;
+         dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+-        expect_dm(&dm, devices[0].name, 0, FALSE);
++        expect_dm(&dm, devices[0].name, 0, TRUE);
+         dm = devices[1].original_mode;
+         dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT;
+-        expect_dm(&dm, devices[1].name, 0, FALSE);
++        expect_dm(&dm, devices[1].name, 0, TRUE);
+ 
+         CloseHandle(info1.hProcess);
+         CloseHandle(info1.hThread);
+diff --git a/dlls/winex11.drv/display.c b/dlls/winex11.drv/display.c
+index 49475571f711..664ee5bed03f 100644
+--- a/dlls/winex11.drv/display.c
++++ b/dlls/winex11.drv/display.c
+@@ -222,6 +222,8 @@ BOOL X11DRV_GetCurrentDisplaySettings( LPCWSTR name, BOOL is_primary, LPDEVMODEW
+     DEVMODEW mode;
+     x11drv_settings_id id;
+ 
++    X11DRV_ProcessEvents( QS_SENDMESSAGE );
++
+     if (!settings_handler.get_id( name, is_primary, &id ) || !settings_handler.get_current_mode( id, &mode ))
+     {
+         ERR("Failed to get %s current display settings.\n", wine_dbgstr_w(name));
+-- 
+2.43.0
+

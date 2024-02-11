@@ -1,0 +1,196 @@
+From e3928cd5a056060747149008d9a007e292dd4e45 Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <zfigura@codeweavers.com>
+Date: Sat, 11 Nov 2023 21:21:52 -0600
+Subject: [PATCH 15/27] wined3d: Introduce a separate vp_disable() method.
+
+Analogous to shader_disable().
+
+We'd like to pass a wined3d_state pointer to vp_enable() to let it handle
+actually compiling the vertex pipeline, which doesn't mesh well conceptually
+with its use in shader_disable().
+---
+ dlls/wined3d/arb_program_shader.c |  2 +-
+ dlls/wined3d/ffp_gl.c             | 29 +++++++++++++++++------------
+ dlls/wined3d/glsl_shader.c        | 17 ++++++++++-------
+ dlls/wined3d/shader.c             |  2 +-
+ dlls/wined3d/shader_spirv.c       |  8 +++++++-
+ dlls/wined3d/wined3d_private.h    |  1 +
+ 6 files changed, 37 insertions(+), 22 deletions(-)
+
+diff --git a/dlls/wined3d/arb_program_shader.c b/dlls/wined3d/arb_program_shader.c
+index 4e856c6a616d..a1f56406a0a7 100644
+--- a/dlls/wined3d/arb_program_shader.c
++++ b/dlls/wined3d/arb_program_shader.c
+@@ -4778,7 +4778,7 @@ static void shader_arb_disable(void *shader_priv, struct wined3d_context *contex
+         gl_info->gl_ops.gl.p_glDisable(GL_VERTEX_PROGRAM_ARB);
+         checkGLcall("glDisable(GL_VERTEX_PROGRAM_ARB)");
+     }
+-    priv->vertex_pipe->vp_enable(context, FALSE);
++    priv->vertex_pipe->vp_disable(context);
+ 
+     if (gl_info->supported[ARB_COLOR_BUFFER_FLOAT] && priv->last_vs_color_unclamp)
+     {
+diff --git a/dlls/wined3d/ffp_gl.c b/dlls/wined3d/ffp_gl.c
+index d52d198e5453..8d8a14107eb2 100644
+--- a/dlls/wined3d/ffp_gl.c
++++ b/dlls/wined3d/ffp_gl.c
+@@ -4842,6 +4842,8 @@ static const struct wined3d_state_entry_template ffp_fragmentstate_template[] =
+ /* Context activation is done by the caller. */
+ static void ffp_pipe_enable(const struct wined3d_context *context, BOOL enable) {}
+ 
++static void ffp_pipe_disable(const struct wined3d_context *context) {}
++
+ static void *ffp_alloc(const struct wined3d_shader_backend_ops *shader_backend, void *shader_priv)
+ {
+     return shader_priv;
+@@ -4879,12 +4881,13 @@ static unsigned int vp_ffp_get_emul_mask(const struct wined3d_adapter *adapter)
+ 
+ const struct wined3d_vertex_pipe_ops ffp_vertex_pipe =
+ {
+-    ffp_pipe_enable,
+-    vp_ffp_get_caps,
+-    vp_ffp_get_emul_mask,
+-    ffp_alloc,
+-    ffp_free,
+-    vp_ffp_states,
++    .vp_enable = ffp_pipe_enable,
++    .vp_disable = ffp_pipe_disable,
++    .vp_get_caps = vp_ffp_get_caps,
++    .vp_get_emul_mask = vp_ffp_get_emul_mask,
++    .vp_alloc = ffp_alloc,
++    .vp_free = ffp_free,
++    .vp_states = vp_ffp_states,
+ };
+ 
+ static void ffp_fragment_get_caps(const struct wined3d_adapter *adapter, struct fragment_caps *caps)
+@@ -4965,6 +4968,8 @@ const struct wined3d_fragment_pipe_ops ffp_fragment_pipeline =
+ 
+ static void none_pipe_enable(const struct wined3d_context *context, BOOL enable) {}
+ 
++static void none_pipe_disable(const struct wined3d_context *context) {}
++
+ static void *none_alloc(const struct wined3d_shader_backend_ops *shader_backend, void *shader_priv)
+ {
+     return shader_priv;
+@@ -4984,12 +4989,12 @@ static unsigned int vp_none_get_emul_mask(const struct wined3d_adapter *adapter)
+ 
+ const struct wined3d_vertex_pipe_ops none_vertex_pipe =
+ {
+-    none_pipe_enable,
+-    vp_none_get_caps,
+-    vp_none_get_emul_mask,
+-    none_alloc,
+-    none_free,
+-    NULL,
++    .vp_enable = none_pipe_enable,
++    .vp_disable = none_pipe_disable,
++    .vp_get_caps = vp_none_get_caps,
++    .vp_get_emul_mask = vp_none_get_emul_mask,
++    .vp_alloc = none_alloc,
++    .vp_free = none_free,
+ };
+ 
+ static void fp_none_get_caps(const struct wined3d_adapter *adapter, struct fragment_caps *caps)
+diff --git a/dlls/wined3d/glsl_shader.c b/dlls/wined3d/glsl_shader.c
+index 4e9a3b3467b1..07b3d002c677 100644
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -10820,7 +10820,7 @@ static void shader_glsl_disable(void *shader_priv, struct wined3d_context *conte
+     GL_EXTCALL(glUseProgram(0));
+     checkGLcall("glUseProgram");
+ 
+-    priv->vertex_pipe->vp_enable(context, FALSE);
++    priv->vertex_pipe->vp_disable(context);
+     priv->fragment_pipe->fp_enable(context, FALSE);
+ 
+     if (needs_legacy_glsl_syntax(gl_info) && gl_info->supported[ARB_COLOR_BUFFER_FLOAT])
+@@ -11565,6 +11565,8 @@ const struct wined3d_shader_backend_ops glsl_shader_backend =
+ 
+ static void glsl_vertex_pipe_vp_enable(const struct wined3d_context *context, BOOL enable) {}
+ 
++static void glsl_vertex_pipe_vp_disable(const struct wined3d_context *context) {}
++
+ static void glsl_vertex_pipe_vp_get_caps(const struct wined3d_adapter *adapter, struct wined3d_vertex_caps *caps)
+ {
+     const struct wined3d_gl_info *gl_info = &wined3d_adapter_gl_const(adapter)->gl_info;
+@@ -12049,12 +12051,13 @@ static const struct wined3d_state_entry_template glsl_vertex_pipe_vp_states[] =
+  *   - Implement vertex tweening. */
+ const struct wined3d_vertex_pipe_ops glsl_vertex_pipe =
+ {
+-    glsl_vertex_pipe_vp_enable,
+-    glsl_vertex_pipe_vp_get_caps,
+-    glsl_vertex_pipe_vp_get_emul_mask,
+-    glsl_vertex_pipe_vp_alloc,
+-    glsl_vertex_pipe_vp_free,
+-    glsl_vertex_pipe_vp_states,
++    .vp_enable = glsl_vertex_pipe_vp_enable,
++    .vp_disable = glsl_vertex_pipe_vp_disable,
++    .vp_get_caps = glsl_vertex_pipe_vp_get_caps,
++    .vp_get_emul_mask = glsl_vertex_pipe_vp_get_emul_mask,
++    .vp_alloc = glsl_vertex_pipe_vp_alloc,
++    .vp_free = glsl_vertex_pipe_vp_free,
++    .vp_states = glsl_vertex_pipe_vp_states,
+ };
+ 
+ static void glsl_fragment_pipe_enable(const struct wined3d_context *context, BOOL enable)
+diff --git a/dlls/wined3d/shader.c b/dlls/wined3d/shader.c
+index b72a3df87376..e047e3da03da 100644
+--- a/dlls/wined3d/shader.c
++++ b/dlls/wined3d/shader.c
+@@ -1952,7 +1952,7 @@ static void shader_none_disable(void *shader_priv, struct wined3d_context *conte
+ {
+     struct shader_none_priv *priv = shader_priv;
+ 
+-    priv->vertex_pipe->vp_enable(context, FALSE);
++    priv->vertex_pipe->vp_disable(context);
+     priv->fragment_pipe->fp_enable(context, FALSE);
+ 
+     context->shader_update_mask = (1u << WINED3D_SHADER_TYPE_PIXEL)
+diff --git a/dlls/wined3d/shader_spirv.c b/dlls/wined3d/shader_spirv.c
+index 1eac7373ee35..ca14564d7d6f 100644
+--- a/dlls/wined3d/shader_spirv.c
++++ b/dlls/wined3d/shader_spirv.c
+@@ -904,7 +904,7 @@ static void shader_spirv_disable(void *shader_priv, struct wined3d_context *cont
+     struct wined3d_context_vk *context_vk = wined3d_context_vk(context);
+     struct shader_spirv_priv *priv = shader_priv;
+ 
+-    priv->vertex_pipe->vp_enable(context, false);
++    priv->vertex_pipe->vp_disable(context);
+     priv->fragment_pipe->fp_enable(context, false);
+ 
+     context_vk->compute.vk_pipeline = VK_NULL_HANDLE;
+@@ -1141,6 +1141,11 @@ static void spirv_vertex_pipe_vk_vp_enable(const struct wined3d_context *context
+     /* Nothing to do. */
+ }
+ 
++static void spirv_vertex_pipe_vk_vp_disable(const struct wined3d_context *context)
++{
++    /* Nothing to do. */
++}
++
+ static void spirv_vertex_pipe_vk_vp_get_caps(const struct wined3d_adapter *adapter, struct wined3d_vertex_caps *caps)
+ {
+     memset(caps, 0, sizeof(*caps));
+@@ -1200,6 +1205,7 @@ static const struct wined3d_state_entry_template spirv_vertex_pipe_vk_vp_states[
+ static const struct wined3d_vertex_pipe_ops spirv_vertex_pipe_vk =
+ {
+     .vp_enable = spirv_vertex_pipe_vk_vp_enable,
++    .vp_disable = spirv_vertex_pipe_vk_vp_disable,
+     .vp_get_caps = spirv_vertex_pipe_vk_vp_get_caps,
+     .vp_get_emul_mask = spirv_vertex_pipe_vk_vp_get_emul_mask,
+     .vp_alloc = spirv_vertex_pipe_vk_vp_alloc,
+diff --git a/dlls/wined3d/wined3d_private.h b/dlls/wined3d/wined3d_private.h
+index 033e0d6b9dc7..8c562ba5dafe 100644
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -2029,6 +2029,7 @@ struct wined3d_vertex_caps
+ struct wined3d_vertex_pipe_ops
+ {
+     void (*vp_enable)(const struct wined3d_context *context, BOOL enable);
++    void (*vp_disable)(const struct wined3d_context *context);
+     void (*vp_get_caps)(const struct wined3d_adapter *adapter, struct wined3d_vertex_caps *caps);
+     unsigned int (*vp_get_emul_mask)(const struct wined3d_adapter *adapter);
+     void *(*vp_alloc)(const struct wined3d_shader_backend_ops *shader_backend, void *shader_priv);
+-- 
+2.43.0
+

@@ -1,0 +1,243 @@
+From f6acb6a7efa7bd21a9bbca9edb5da87c02061849 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Tue, 16 Jan 2024 10:36:58 +0200
+Subject: [PATCH 05/27] winewayland.drv: Associate each GDI adapter with its
+ Wayland output.
+
+Introduce and use driver data for GDI adapters to associate each
+adapter with its corresponding Wayland output.
+
+Use this association to ensure we get the proper current display
+mode for each output, when updating the display devices.
+---
+ dlls/win32u/sysparams.c        | 36 +++++++++++++++++++++++---
+ dlls/winewayland.drv/display.c | 47 +++++++++++++++++++++++-----------
+ include/wine/gdi_driver.h      |  4 ++-
+ 3 files changed, 68 insertions(+), 19 deletions(-)
+
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+index 946f40da8a2f..8917676b00fd 100644
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -183,6 +183,7 @@ static const WCHAR linkedW[] = {'L','i','n','k','e','d',0};
+ static const WCHAR symbolic_link_valueW[] =
+     {'S','y','m','b','o','l','i','c','L','i','n','k','V','a','l','u','e',0};
+ static const WCHAR state_flagsW[] = {'S','t','a','t','e','F','l','a','g','s',0};
++static const WCHAR driver_dataW[] = {'D','r','i','v','e','r','D','a','t','a',0};
+ static const WCHAR gpu_idW[] = {'G','P','U','I','D',0};
+ static const WCHAR hardware_idW[] = {'H','a','r','d','w','a','r','e','I','D',0};
+ static const WCHAR device_descW[] = {'D','e','v','i','c','e','D','e','s','c',0};
+@@ -243,6 +244,8 @@ struct adapter
+     const WCHAR *config_key;
+     unsigned int mode_count;
+     DEVMODEW *modes;
++    unsigned char *driver_data;
++    UINT driver_data_len;
+ };
+ 
+ #define MONITOR_INFO_HAS_MONITOR_ID 0x00000001
+@@ -476,6 +479,7 @@ static void adapter_release( struct adapter *adapter )
+     if (!InterlockedDecrement( &adapter->refcount ))
+     {
+         free( adapter->modes );
++        free( adapter->driver_data );
+         free( adapter );
+     }
+ }
+@@ -760,6 +764,21 @@ static BOOL read_display_adapter_settings( unsigned int index, struct adapter *i
+     if (query_reg_value( hkey, state_flagsW, value, sizeof(buffer) ) && value->Type == REG_DWORD)
+         info->dev.state_flags = *(const DWORD *)value->Data;
+ 
++    /* DriverData */
++    if (query_reg_value( hkey, driver_dataW, value, sizeof(buffer) ) && value->Type == REG_BINARY)
++    {
++        info->driver_data = malloc( value->DataLength );
++        if (info->driver_data)
++        {
++            memcpy( info->driver_data, value->Data, value->DataLength );
++            info->driver_data_len = value->DataLength;
++        }
++        else
++        {
++            info->driver_data_len = 0;
++        }
++    }
++
+     /* Interface name */
+     info->dev.interface_name[0] = 0;
+ 
+@@ -1479,6 +1498,11 @@ static void add_adapter( const struct gdi_adapter *adapter, void *param )
+                    (lstrlenW( ctx->gpuid ) + 1) * sizeof(WCHAR) );
+     set_reg_value( ctx->adapter_key, state_flagsW, REG_DWORD, &adapter->state_flags,
+                    sizeof(adapter->state_flags) );
++    if (adapter->driver_data && adapter->driver_data_len)
++    {
++        set_reg_value( ctx->adapter_key, driver_dataW, REG_BINARY,
++                       adapter->driver_data, adapter->driver_data_len );
++    }
+ }
+ 
+ static void add_monitor( const struct gdi_monitor *monitor, void *param )
+@@ -1636,7 +1660,7 @@ static void add_mode( const DEVMODEW *mode, BOOL current, void *param )
+ 
+ static struct display_device *find_adapter_device_by_id( UINT index );
+ 
+-static BOOL get_adapter( UINT adapter_idx, DEVMODEW *mode, void *param )
++static BOOL get_adapter( UINT adapter_idx, DEVMODEW *mode, void *data, UINT *data_len, void *param )
+ {
+     struct device_manager_ctx *ctx = param;
+     struct display_device *device;
+@@ -1651,7 +1675,13 @@ static BOOL get_adapter( UINT adapter_idx, DEVMODEW *mode, void *param )
+     if (!(device = find_adapter_device_by_id( adapter_idx ))) return FALSE;
+     adapter = CONTAINING_RECORD( device, struct adapter, dev );
+ 
+-    return adapter_get_current_settings( adapter, mode );
++    if (!adapter_get_current_settings( adapter, mode )) return FALSE;
++
++    *data_len = min( *data_len, adapter->driver_data_len );
++    if (data && adapter->driver_data)
++        memcpy( data, adapter->driver_data, *data_len );
++
++    return TRUE;
+ }
+ 
+ static const struct gdi_device_manager device_manager =
+@@ -1920,7 +1950,7 @@ static void desktop_add_mode( const DEVMODEW *mode, BOOL current, void *param )
+     }
+ }
+ 
+-static BOOL desktop_get_adapter( UINT id, DEVMODEW *mode, void *param )
++static BOOL desktop_get_adapter( UINT id, DEVMODEW *mode, void *data, UINT *data_len, void *param )
+ {
+     return FALSE;
+ }
+diff --git a/dlls/winewayland.drv/display.c b/dlls/winewayland.drv/display.c
+index 584732a73db5..ab7f75996599 100644
+--- a/dlls/winewayland.drv/display.c
++++ b/dlls/winewayland.drv/display.c
+@@ -47,6 +47,11 @@ void wayland_init_display_devices(BOOL force)
+     NtUserGetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &num_path, &num_mode);
+ }
+ 
++struct wayland_adapter_data
++{
++    char output_name[64];
++};
++
+ struct output_info
+ {
+     int x, y;
+@@ -213,14 +218,21 @@ static void wayland_add_device_gpu(const struct gdi_device_manager *device_manag
+ }
+ 
+ static void wayland_add_device_adapter(const struct gdi_device_manager *device_manager,
+-                                       void *param, INT output_id)
++                                       void *param, INT output_id,
++                                       struct output_info *output_info)
+ {
+     struct gdi_adapter adapter;
++    struct wayland_adapter_data data;
++
+     adapter.id = output_id;
+     adapter.state_flags = DISPLAY_DEVICE_ATTACHED_TO_DESKTOP;
+     if (output_id == 0)
+         adapter.state_flags |= DISPLAY_DEVICE_PRIMARY_DEVICE;
+ 
++    lstrcpynA(data.output_name, output_info->output->name, sizeof(data.output_name));
++    adapter.driver_data = &data;
++    adapter.driver_data_len = sizeof(data);
++
+     TRACE("id=0x%s state_flags=0x%x\n",
+           wine_dbgstr_longlong(adapter.id), (UINT)adapter.state_flags);
+ 
+@@ -310,25 +322,32 @@ static struct wayland_output_mode *get_matching_output_mode(struct wayland_outpu
+ 
+ static void output_info_init(struct output_info *output_info,
+                              struct wayland_output *output,
+-                             int adapter_id,
+                              const struct gdi_device_manager *device_manager,
+                              void *param)
+ {
+     DEVMODEW devmode = {.dmSize = sizeof(devmode)};
+     struct wayland_output_mode *mode;
++    struct wayland_adapter_data data;
++    UINT data_len = sizeof(data);
++    UINT id = 0;
+ 
+     output_info->output = &output->current;
++    output_info->mode = output->current.current_mode;
++    output_info->bpp = 32;
+ 
+-    if (device_manager->get_adapter(adapter_id, &devmode, param) &&
+-        (mode = get_matching_output_mode(output, &devmode)))
+-    {
+-        output_info->mode = mode;
+-        output_info->bpp = devmode.dmBitsPerPel;
+-    }
+-    else
++    while (device_manager->get_adapter(id, &devmode, &data, &data_len, param))
+     {
+-        output_info->mode = output->current.current_mode;
+-        output_info->bpp = 32;
++        if (data_len == sizeof(data) &&
++            !strcmp(output->current.name, data.output_name))
++        {
++            if ((mode = get_matching_output_mode(output, &devmode)))
++            {
++                output_info->mode = mode;
++                output_info->bpp = devmode.dmBitsPerPel;
++            }
++        }
++        data_len = sizeof(data);
++        ++id;
+     }
+ }
+ 
+@@ -359,9 +378,8 @@ BOOL WAYLAND_UpdateDisplayDevices(const struct gdi_device_manager *device_manage
+         output_info = wl_array_add(&output_info_array, sizeof(*output_info));
+         /* TODO: Don't assume that the order of devices matches the order
+          * of the outputs in the list. */
+-        if (output_info) output_info_init(output_info, output, output_id, device_manager, param);
++        if (output_info) output_info_init(output_info, output, device_manager, param);
+         else ERR("Failed to allocate space for output_info\n");
+-        output_id++;
+     }
+ 
+     output_info_array_arrange_physical_coords(&output_info_array);
+@@ -369,10 +387,9 @@ BOOL WAYLAND_UpdateDisplayDevices(const struct gdi_device_manager *device_manage
+     /* Populate GDI devices. */
+     wayland_add_device_gpu(device_manager, param);
+ 
+-    output_id = 0;
+     wl_array_for_each(output_info, &output_info_array)
+     {
+-        wayland_add_device_adapter(device_manager, param, output_id);
++        wayland_add_device_adapter(device_manager, param, output_id, output_info);
+         wayland_add_device_monitor(device_manager, param, output_info);
+         wayland_add_device_modes(device_manager, param, output_info);
+         output_id++;
+diff --git a/include/wine/gdi_driver.h b/include/wine/gdi_driver.h
+index d36793773448..202a164d0702 100644
+--- a/include/wine/gdi_driver.h
++++ b/include/wine/gdi_driver.h
+@@ -258,6 +258,8 @@ struct gdi_adapter
+ {
+     ULONG_PTR id;
+     DWORD state_flags;
++    void *driver_data;
++    UINT driver_data_len;
+ };
+ 
+ struct gdi_monitor
+@@ -275,7 +277,7 @@ struct gdi_device_manager
+     void (*add_adapter)( const struct gdi_adapter *adapter, void *param );
+     void (*add_monitor)( const struct gdi_monitor *monitor, void *param );
+     void (*add_mode)( const DEVMODEW *mode, BOOL current, void *param );
+-    BOOL (*get_adapter)( UINT id, DEVMODEW *mode, void *param );
++    BOOL (*get_adapter)( UINT id, DEVMODEW *mode, void *data, UINT *data_len, void *param );
+ };
+ 
+ #define WINE_DM_UNSUPPORTED 0x80000000
+-- 
+2.43.0
+

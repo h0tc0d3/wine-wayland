@@ -1,0 +1,173 @@
+From a028edf52e0cd5acb9c417cc302660be3c399a54 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Thu, 25 Jan 2024 12:06:54 +0200
+Subject: [PATCH 04/27] winewayland.drv: Respect current device mode on display
+ device updates.
+
+Since Wayland doesn't support mode changes, we let win32u handle them by
+just recording them in the registry, and we use that information as the
+authoritative source for the current mode when updating the devices.
+---
+ dlls/win32u/sysparams.c        | 29 ++++++++++++++++++++-
+ dlls/winewayland.drv/display.c | 47 +++++++++++++++++++++++++++++++---
+ include/wine/gdi_driver.h      |  1 +
+ 3 files changed, 72 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+index 673082056b13..946f40da8a2f 100644
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -1253,8 +1253,8 @@ static void add_gpu( const struct gdi_gpu *gpu, void *param )
+     {
+         pthread_mutex_lock( &display_lock );
+         ctx->mutex = get_display_device_init_mutex();
+-        prepare_devices();
+     }
++    if (gpu_index == 0) prepare_devices();
+ 
+     sprintf( buffer, "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%08X&REV_%02X\\%08X",
+              gpu->vendor_id, gpu->device_id, gpu->subsys_id, gpu->revision_id, gpu_index );
+@@ -1634,12 +1634,33 @@ static void add_mode( const DEVMODEW *mode, BOOL current, void *param )
+     }
+ }
+ 
++static struct display_device *find_adapter_device_by_id( UINT index );
++
++static BOOL get_adapter( UINT adapter_idx, DEVMODEW *mode, void *param )
++{
++    struct device_manager_ctx *ctx = param;
++    struct display_device *device;
++    struct adapter *adapter = NULL;
++
++    if (!ctx->mutex)
++    {
++        ctx->mutex = get_display_device_init_mutex();
++        pthread_mutex_lock( &display_lock );
++    }
++
++    if (!(device = find_adapter_device_by_id( adapter_idx ))) return FALSE;
++    adapter = CONTAINING_RECORD( device, struct adapter, dev );
++
++    return adapter_get_current_settings( adapter, mode );
++}
++
+ static const struct gdi_device_manager device_manager =
+ {
+     add_gpu,
+     add_adapter,
+     add_monitor,
+     add_mode,
++    get_adapter,
+ };
+ 
+ static void reset_display_manager_ctx( struct device_manager_ctx *ctx )
+@@ -1899,12 +1920,18 @@ static void desktop_add_mode( const DEVMODEW *mode, BOOL current, void *param )
+     }
+ }
+ 
++static BOOL desktop_get_adapter( UINT id, DEVMODEW *mode, void *param )
++{
++    return FALSE;
++}
++
+ static const struct gdi_device_manager desktop_device_manager =
+ {
+     desktop_add_gpu,
+     desktop_add_adapter,
+     desktop_add_monitor,
+     desktop_add_mode,
++    desktop_get_adapter,
+ };
+ 
+ static BOOL desktop_update_display_devices( BOOL force, struct device_manager_ctx *ctx )
+diff --git a/dlls/winewayland.drv/display.c b/dlls/winewayland.drv/display.c
+index 888c6e5aabbd..584732a73db5 100644
+--- a/dlls/winewayland.drv/display.c
++++ b/dlls/winewayland.drv/display.c
+@@ -289,12 +289,47 @@ static void wayland_add_device_modes(const struct gdi_device_manager *device_man
+     }
+ }
+ 
++static struct wayland_output_mode *get_matching_output_mode(struct wayland_output *output,
++                                                            DEVMODEW *devmode)
++{
++    struct wayland_output_mode *output_mode;
++
++    RB_FOR_EACH_ENTRY(output_mode, &output->current.modes,
++                      struct wayland_output_mode, entry)
++    {
++        if (devmode->dmPelsWidth == output_mode->width &&
++            devmode->dmPelsHeight == output_mode->height &&
++            output_mode->refresh / 1000 == devmode->dmDisplayFrequency)
++         {
++            return output_mode;
++         }
++    }
++
++    return NULL;
++}
++
+ static void output_info_init(struct output_info *output_info,
+-                             struct wayland_output *output)
++                             struct wayland_output *output,
++                             int adapter_id,
++                             const struct gdi_device_manager *device_manager,
++                             void *param)
+ {
++    DEVMODEW devmode = {.dmSize = sizeof(devmode)};
++    struct wayland_output_mode *mode;
++
+     output_info->output = &output->current;
+-    output_info->mode = output->current.current_mode;
+-    output_info->bpp = 32;
++
++    if (device_manager->get_adapter(adapter_id, &devmode, param) &&
++        (mode = get_matching_output_mode(output, &devmode)))
++    {
++        output_info->mode = mode;
++        output_info->bpp = devmode.dmBitsPerPel;
++    }
++    else
++    {
++        output_info->mode = output->current.current_mode;
++        output_info->bpp = 32;
++    }
+ }
+ 
+ /***********************************************************************
+@@ -322,8 +357,11 @@ BOOL WAYLAND_UpdateDisplayDevices(const struct gdi_device_manager *device_manage
+     {
+         if (!output->current.current_mode) continue;
+         output_info = wl_array_add(&output_info_array, sizeof(*output_info));
+-        if (output_info) output_info_init(output_info, output);
++        /* TODO: Don't assume that the order of devices matches the order
++         * of the outputs in the list. */
++        if (output_info) output_info_init(output_info, output, output_id, device_manager, param);
+         else ERR("Failed to allocate space for output_info\n");
++        output_id++;
+     }
+ 
+     output_info_array_arrange_physical_coords(&output_info_array);
+@@ -331,6 +369,7 @@ BOOL WAYLAND_UpdateDisplayDevices(const struct gdi_device_manager *device_manage
+     /* Populate GDI devices. */
+     wayland_add_device_gpu(device_manager, param);
+ 
++    output_id = 0;
+     wl_array_for_each(output_info, &output_info_array)
+     {
+         wayland_add_device_adapter(device_manager, param, output_id);
+diff --git a/include/wine/gdi_driver.h b/include/wine/gdi_driver.h
+index bd827c31cb18..d36793773448 100644
+--- a/include/wine/gdi_driver.h
++++ b/include/wine/gdi_driver.h
+@@ -275,6 +275,7 @@ struct gdi_device_manager
+     void (*add_adapter)( const struct gdi_adapter *adapter, void *param );
+     void (*add_monitor)( const struct gdi_monitor *monitor, void *param );
+     void (*add_mode)( const DEVMODEW *mode, BOOL current, void *param );
++    BOOL (*get_adapter)( UINT id, DEVMODEW *mode, void *param );
+ };
+ 
+ #define WINE_DM_UNSUPPORTED 0x80000000
+-- 
+2.43.0
+

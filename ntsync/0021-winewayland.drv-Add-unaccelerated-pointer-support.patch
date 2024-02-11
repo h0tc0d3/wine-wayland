@@ -1,0 +1,204 @@
+From c25460cfd9e3b6b33740dff7527b6445d7068327 Mon Sep 17 00:00:00 2001
+From: Grigory Vasilyev <h0tc0d3@gmail.com>
+Date: Thu, 14 Dec 2023 21:53:12 +0300
+Subject: [PATCH 21/27] winewayland.drv: Add unaccelerated pointer support
+
+Adds the registry key
+HKEY_CURRENT_USER\\Software\\Wine\\Wayland Driver\\unaccelerated_pointer
+witch allows raw input. This makes it easier
+to calculate the same sensitivity in different games,
+use sensitivity calculators, and easily change values
+when changing DPI and do not depend on the compositor or OS.
+
+For example, you want to set the sensitivity to half as much,
+and sensitivity curves in libinput are more difficult
+to calculate than in the games themselves.
+---
+ dlls/winewayland.drv/Makefile.in       |  1 +
+ dlls/winewayland.drv/dllmain.c         | 41 ++++++++++++++++++++++++++
+ dlls/winewayland.drv/unixlib.h         |  1 +
+ dlls/winewayland.drv/wayland_pointer.c | 23 ++++++++++++---
+ dlls/winewayland.drv/waylanddrv_main.c |  9 ++++++
+ 5 files changed, 71 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/winewayland.drv/Makefile.in b/dlls/winewayland.drv/Makefile.in
+index b47bdb262c0d..4170cbc114f5 100644
+--- a/dlls/winewayland.drv/Makefile.in
++++ b/dlls/winewayland.drv/Makefile.in
+@@ -2,6 +2,7 @@ MODULE = winewayland.drv
+ UNIXLIB = winewayland.so
+ UNIX_CFLAGS = $(WAYLAND_CLIENT_CFLAGS) $(XKBCOMMON_CFLAGS) $(XKBREGISTRY_CFLAGS)
+ UNIX_LIBS = -lwin32u $(WAYLAND_CLIENT_LIBS) $(XKBCOMMON_LIBS) $(XKBREGISTRY_LIBS) $(PTHREAD_LIBS) -lm
++IMPORTS = advapi32
+ 
+ SOURCES = \
+ 	display.c \
+diff --git a/dlls/winewayland.drv/dllmain.c b/dlls/winewayland.drv/dllmain.c
+index d040620957b7..075f3931c872 100644
+--- a/dlls/winewayland.drv/dllmain.c
++++ b/dlls/winewayland.drv/dllmain.c
+@@ -20,6 +20,7 @@
+ 
+ #include "waylanddrv_dll.h"
+ 
++#include "winreg.h"
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
+@@ -38,12 +39,52 @@ static DWORD WINAPI wayland_read_events_thread(void *arg)
+ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved)
+ {
+     DWORD tid;
++    DWORD regRes;
++    DWORD regValueSize;
++    LPWSTR regValue = NULL;
++    HKEY hSubKey = NULL;
++    BOOL unaccelerated_pointer = FALSE;
+ 
+     if (reason != DLL_PROCESS_ATTACH) return TRUE;
+ 
+     DisableThreadLibraryCalls(instance);
+     if (__wine_init_unix_call()) return FALSE;
+ 
++    regRes = RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Wine\\Wayland Driver", 0, KEY_READ, &hSubKey);
++    if (regRes != ERROR_SUCCESS)
++    {
++        WINE_TRACE("Registry key HKCU\\Software\\Wine\\Wayland Driver not exist.\n");
++        goto close_registry;
++    }
++
++    regRes = RegQueryValueExW(hSubKey, L"unaccelerated_pointer", NULL, NULL, NULL, &regValueSize);
++    if (regRes != ERROR_SUCCESS)
++    {
++        WINE_ERR("Can't get value size for HKCU\\Software\\Wine\\Wayland Driver\\unaccelerated_pointer. Error: %d\n", regRes);
++        goto close_registry;
++    }
++
++    regValue = calloc(regValueSize + 1, sizeof(*regValue));
++
++    regRes = RegQueryValueExW(hSubKey, L"unaccelerated_pointer", NULL, NULL, (LPBYTE)regValue, &regValueSize);
++    if (regRes != ERROR_SUCCESS)
++    {
++        WINE_ERR("Can't get value for HKCU\\Software\\Wine\\Wayland Driver\\unaccelerated_pointer. Error: %d\n", regRes);
++        free(regValue);
++        goto close_registry;
++    }
++
++    WINE_TRACE("Registry HKCU\\Software\\Wine\\Wayland Driver\\unaccelerated_pointer value=%s.\n", regValue);
++    if(*regValue)
++        unaccelerated_pointer = TRUE;
++
++    free(regValue);
++
++close_registry:
++    RegCloseKey(hSubKey);
++
++    WAYLANDDRV_UNIX_CALL(set_unaccelerated_pointer, unaccelerated_pointer);
++
+     if (WAYLANDDRV_UNIX_CALL(init, NULL))
+         return FALSE;
+ 
+diff --git a/dlls/winewayland.drv/unixlib.h b/dlls/winewayland.drv/unixlib.h
+index dc3bfdf8893d..53b8afada1d9 100644
+--- a/dlls/winewayland.drv/unixlib.h
++++ b/dlls/winewayland.drv/unixlib.h
+@@ -27,6 +27,7 @@ enum waylanddrv_unix_func
+ {
+     waylanddrv_unix_func_init,
+     waylanddrv_unix_func_read_events,
++    waylanddrv_unix_func_set_unaccelerated_pointer,
+     waylanddrv_unix_func_count,
+ };
+ 
+diff --git a/dlls/winewayland.drv/wayland_pointer.c b/dlls/winewayland.drv/wayland_pointer.c
+index 54dd7931b6e5..4508e1f2516c 100644
+--- a/dlls/winewayland.drv/wayland_pointer.c
++++ b/dlls/winewayland.drv/wayland_pointer.c
+@@ -34,6 +34,8 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(waylanddrv);
+ 
++extern BOOL waylanddrv_unaccelerated_pointer;
++
+ static HWND wayland_pointer_get_focused_hwnd(void)
+ {
+     struct wayland_pointer *pointer = &process_wayland.pointer;
+@@ -259,15 +261,28 @@ static void relative_pointer_v1_relative_motion(void *data,
+     POINT screen, origin;
+     struct wayland_surface *surface;
+     RECT window_rect;
++    double delta_x;
++    double delta_y;
+ 
+     if (!(hwnd = wayland_pointer_get_focused_hwnd())) return;
+     if (!(surface = wayland_surface_lock_hwnd(hwnd))) return;
+ 
+     window_rect = surface->window.rect;
+ 
++    if(waylanddrv_unaccelerated_pointer)
++    {
++        delta_x = wl_fixed_to_double(dx_unaccel);
++        delta_y = wl_fixed_to_double(dy_unaccel);
++    }
++    else
++    {
++        delta_x = wl_fixed_to_double(dx);
++        delta_y = wl_fixed_to_double(dy);
++    }
++
+     wayland_surface_coords_to_window(surface,
+-                                     wl_fixed_to_double(dx),
+-                                     wl_fixed_to_double(dy),
++                                     delta_x,
++                                     delta_y,
+                                      (int *)&screen.x, (int *)&screen.y);
+ 
+     pthread_mutex_unlock(&surface->mutex);
+@@ -313,8 +328,8 @@ static void relative_pointer_v1_relative_motion(void *data,
+     input.mi.dy = screen.y;
+     input.mi.dwFlags = MOUSEEVENTF_MOVE;
+ 
+-    TRACE("hwnd=%p wayland_dxdy=%.2f,%.2f screen_dxdy=%d,%d\n",
+-          hwnd, wl_fixed_to_double(dx), wl_fixed_to_double(dy),
++    TRACE("hwnd=%p unaccelerated_pointer=%d wayland_dxdy=%.2f,%.2f screen_dxdy=%d,%d\n",
++          hwnd, waylanddrv_unaccelerated_pointer, delta_x, delta_y,
+           (int)screen.x, (int)screen.y);
+ 
+     __wine_send_input(hwnd, &input, NULL);
+diff --git a/dlls/winewayland.drv/waylanddrv_main.c b/dlls/winewayland.drv/waylanddrv_main.c
+index b60d282aacb8..b481c0cd709e 100644
+--- a/dlls/winewayland.drv/waylanddrv_main.c
++++ b/dlls/winewayland.drv/waylanddrv_main.c
+@@ -45,6 +45,13 @@ static const struct user_driver_funcs waylanddrv_funcs =
+     .pwine_get_vulkan_driver = WAYLAND_wine_get_vulkan_driver,
+ };
+ 
++BOOL waylanddrv_unaccelerated_pointer;
++
++static void waylanddrv_unix_set_unaccelerated_pointer(BOOL value)
++{
++    waylanddrv_unaccelerated_pointer = value;
++}
++
+ static NTSTATUS waylanddrv_unix_init(void *arg)
+ {
+     /* Set the user driver functions now so that they are available during
+@@ -74,6 +81,7 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+ {
+     waylanddrv_unix_init,
+     waylanddrv_unix_read_events,
++    waylanddrv_unix_set_unaccelerated_pointer,
+ };
+ 
+ C_ASSERT(ARRAYSIZE(__wine_unix_call_funcs) == waylanddrv_unix_func_count);
+@@ -84,6 +92,7 @@ const unixlib_entry_t __wine_unix_call_wow64_funcs[] =
+ {
+     waylanddrv_unix_init,
+     waylanddrv_unix_read_events,
++    waylanddrv_unix_set_unaccelerated_pointer,
+ };
+ 
+ C_ASSERT(ARRAYSIZE(__wine_unix_call_wow64_funcs) == waylanddrv_unix_func_count);
+-- 
+2.43.0
+

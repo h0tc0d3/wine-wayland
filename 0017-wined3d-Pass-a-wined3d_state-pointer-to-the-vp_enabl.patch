@@ -1,0 +1,362 @@
+From a9e1f78b1dd17dde8aa805d4703e92b47c23cec6 Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <zfigura@codeweavers.com>
+Date: Sat, 11 Nov 2023 21:53:59 -0600
+Subject: [PATCH 17/27] wined3d: Pass a wined3d_state pointer to the
+ vp_enable() and fp_enable() methods.
+
+Rename to *_apply_draw_state() per Henri's suggestion.
+---
+ dlls/wined3d/arb_program_shader.c    | 14 +++++++-------
+ dlls/wined3d/ati_fragment_shader.c   |  6 +++---
+ dlls/wined3d/ffp_gl.c                | 12 ++++++------
+ dlls/wined3d/glsl_shader.c           | 13 +++++++------
+ dlls/wined3d/nvidia_texture_shader.c | 14 +++++++-------
+ dlls/wined3d/shader.c                |  4 ++--
+ dlls/wined3d/shader_spirv.c          | 13 +++++++------
+ dlls/wined3d/wined3d_private.h       |  4 ++--
+ 8 files changed, 41 insertions(+), 39 deletions(-)
+
+diff --git a/dlls/wined3d/arb_program_shader.c b/dlls/wined3d/arb_program_shader.c
+index ec2a578802ad..8a31d67662d4 100644
+--- a/dlls/wined3d/arb_program_shader.c
++++ b/dlls/wined3d/arb_program_shader.c
+@@ -4630,7 +4630,7 @@ static void shader_arb_update_graphics_shaders(struct shader_arb_priv *priv,
+         GL_EXTCALL(glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, compiled->prgId));
+         checkGLcall("glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, compiled->prgId);");
+ 
+-        priv->fragment_pipe->fp_enable(context, FALSE);
++        priv->fragment_pipe->fp_apply_draw_state(context, state);
+ 
+         /* Enable OpenGL fragment programs. Note that we may have already
+          * disabled them when disabling the fragment pipeline. */
+@@ -4677,7 +4677,7 @@ static void shader_arb_update_graphics_shaders(struct shader_arb_priv *priv,
+             gl_info->gl_ops.gl.p_glDisable(GL_FRAGMENT_PROGRAM_ARB);
+             checkGLcall("glDisable(GL_FRAGMENT_PROGRAM_ARB)");
+         }
+-        priv->fragment_pipe->fp_enable(context, TRUE);
++        priv->fragment_pipe->fp_apply_draw_state(context, state);
+     }
+ 
+     if (use_vs(state))
+@@ -4706,7 +4706,7 @@ static void shader_arb_update_graphics_shaders(struct shader_arb_priv *priv,
+         GL_EXTCALL(glBindProgramARB(GL_VERTEX_PROGRAM_ARB, compiled->prgId));
+         checkGLcall("glBindProgramARB(GL_VERTEX_PROGRAM_ARB, compiled->prgId);");
+ 
+-        priv->vertex_pipe->vp_enable(context, FALSE);
++        priv->vertex_pipe->vp_apply_draw_state(context, state);
+ 
+         /* Enable OpenGL vertex programs */
+         gl_info->gl_ops.gl.p_glEnable(GL_VERTEX_PROGRAM_ARB);
+@@ -4736,7 +4736,7 @@ static void shader_arb_update_graphics_shaders(struct shader_arb_priv *priv,
+             gl_info->gl_ops.gl.p_glDisable(GL_VERTEX_PROGRAM_ARB);
+             checkGLcall("glDisable(GL_VERTEX_PROGRAM_ARB)");
+         }
+-        priv->vertex_pipe->vp_enable(context, TRUE);
++        priv->vertex_pipe->vp_apply_draw_state(context, state);
+     }
+ }
+ 
+@@ -5740,11 +5740,11 @@ struct arbfp_ffp_desc
+ };
+ 
+ /* Context activation is done by the caller. */
+-static void arbfp_enable(const struct wined3d_context *context, BOOL enable)
++static void arbfp_apply_draw_state(const struct wined3d_context *context, const struct wined3d_state *state)
+ {
+     const struct wined3d_gl_info *gl_info = wined3d_context_gl_const(context)->gl_info;
+ 
+-    if (enable)
++    if (!use_ps(state))
+     {
+         gl_info->gl_ops.gl.p_glEnable(GL_FRAGMENT_PROGRAM_ARB);
+         checkGLcall("glEnable(GL_FRAGMENT_PROGRAM_ARB)");
+@@ -6902,7 +6902,7 @@ static void arbfp_free_context_data(struct wined3d_context *context)
+ 
+ const struct wined3d_fragment_pipe_ops arbfp_fragment_pipeline =
+ {
+-    .fp_enable = arbfp_enable,
++    .fp_apply_draw_state = arbfp_apply_draw_state,
+     .fp_disable = arbfp_disable,
+     .get_caps = arbfp_get_caps,
+     .get_emul_mask = arbfp_get_emul_mask,
+diff --git a/dlls/wined3d/ati_fragment_shader.c b/dlls/wined3d/ati_fragment_shader.c
+index 058fd1680a9f..45e6c081ba02 100644
+--- a/dlls/wined3d/ati_fragment_shader.c
++++ b/dlls/wined3d/ati_fragment_shader.c
+@@ -1251,11 +1251,11 @@ static const struct wined3d_state_entry_template atifs_fragmentstate_template[]
+ };
+ 
+ /* Context activation is done by the caller. */
+-static void atifs_enable(const struct wined3d_context *context, BOOL enable)
++static void atifs_apply_draw_state(const struct wined3d_context *context, const struct wined3d_state *state)
+ {
+     const struct wined3d_gl_info *gl_info = wined3d_context_gl_const(context)->gl_info;
+ 
+-    if (enable)
++    if (!use_ps(state))
+     {
+         gl_info->gl_ops.gl.p_glEnable(GL_FRAGMENT_SHADER_ATI);
+         checkGLcall("glEnable(GL_FRAGMENT_SHADER_ATI)");
+@@ -1390,7 +1390,7 @@ static void atifs_free_context_data(struct wined3d_context *context)
+ 
+ const struct wined3d_fragment_pipe_ops atifs_fragment_pipeline =
+ {
+-    .fp_enable = atifs_enable,
++    .fp_apply_draw_state = atifs_apply_draw_state,
+     .fp_disable = atifs_disable,
+     .get_caps = atifs_get_caps,
+     .get_emul_mask = atifs_get_emul_mask,
+diff --git a/dlls/wined3d/ffp_gl.c b/dlls/wined3d/ffp_gl.c
+index a9c6bd9fbb26..0b5f1fab653e 100644
+--- a/dlls/wined3d/ffp_gl.c
++++ b/dlls/wined3d/ffp_gl.c
+@@ -4840,7 +4840,7 @@ static const struct wined3d_state_entry_template ffp_fragmentstate_template[] =
+ };
+ 
+ /* Context activation is done by the caller. */
+-static void ffp_pipe_enable(const struct wined3d_context *context, BOOL enable) {}
++static void ffp_pipe_apply_draw_state(const struct wined3d_context *context, const struct wined3d_state *state) {}
+ 
+ static void ffp_pipe_disable(const struct wined3d_context *context) {}
+ 
+@@ -4881,7 +4881,7 @@ static unsigned int vp_ffp_get_emul_mask(const struct wined3d_adapter *adapter)
+ 
+ const struct wined3d_vertex_pipe_ops ffp_vertex_pipe =
+ {
+-    .vp_enable = ffp_pipe_enable,
++    .vp_apply_draw_state = ffp_pipe_apply_draw_state,
+     .vp_disable = ffp_pipe_disable,
+     .vp_get_caps = vp_ffp_get_caps,
+     .vp_get_emul_mask = vp_ffp_get_emul_mask,
+@@ -4955,7 +4955,7 @@ static void ffp_none_context_free(struct wined3d_context *context)
+ 
+ const struct wined3d_fragment_pipe_ops ffp_fragment_pipeline =
+ {
+-    .fp_enable = ffp_pipe_enable,
++    .fp_apply_draw_state = ffp_pipe_apply_draw_state,
+     .fp_disable = ffp_pipe_disable,
+     .get_caps = ffp_fragment_get_caps,
+     .get_emul_mask = ffp_fragment_get_emul_mask,
+@@ -4967,7 +4967,7 @@ const struct wined3d_fragment_pipe_ops ffp_fragment_pipeline =
+     .states = ffp_fragmentstate_template,
+ };
+ 
+-static void none_pipe_enable(const struct wined3d_context *context, BOOL enable) {}
++static void none_pipe_apply_draw_state(const struct wined3d_context *context, const struct wined3d_state *state) {}
+ 
+ static void none_pipe_disable(const struct wined3d_context *context) {}
+ 
+@@ -4990,7 +4990,7 @@ static unsigned int vp_none_get_emul_mask(const struct wined3d_adapter *adapter)
+ 
+ const struct wined3d_vertex_pipe_ops none_vertex_pipe =
+ {
+-    .vp_enable = none_pipe_enable,
++    .vp_apply_draw_state = none_pipe_apply_draw_state,
+     .vp_disable = none_pipe_disable,
+     .vp_get_caps = vp_none_get_caps,
+     .vp_get_emul_mask = vp_none_get_emul_mask,
+@@ -5015,7 +5015,7 @@ static BOOL fp_none_color_fixup_supported(struct color_fixup_desc fixup)
+ 
+ const struct wined3d_fragment_pipe_ops none_fragment_pipe =
+ {
+-    .fp_enable = none_pipe_enable,
++    .fp_apply_draw_state = none_pipe_apply_draw_state,
+     .fp_disable = none_pipe_disable,
+     .get_caps = fp_none_get_caps,
+     .get_emul_mask = fp_none_get_emul_mask,
+diff --git a/dlls/wined3d/glsl_shader.c b/dlls/wined3d/glsl_shader.c
+index afea97e1c5f8..4cff60b17756 100644
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -10704,8 +10704,8 @@ static void shader_glsl_update_graphics_program(struct shader_glsl_priv *priv,
+     GLenum current_vertex_color_clamp;
+     GLuint program_id, prev_id;
+ 
+-    priv->vertex_pipe->vp_enable(&context_gl->c, !use_vs(state));
+-    priv->fragment_pipe->fp_enable(&context_gl->c, !use_ps(state));
++    priv->vertex_pipe->vp_apply_draw_state(&context_gl->c, state);
++    priv->fragment_pipe->fp_apply_draw_state(&context_gl->c, state);
+ 
+     prev_id = ctx_data->glsl_program ? ctx_data->glsl_program->id : 0;
+     set_glsl_shader_program(context_gl, state, priv, ctx_data);
+@@ -11563,7 +11563,7 @@ const struct wined3d_shader_backend_ops glsl_shader_backend =
+     shader_glsl_shader_compile,
+ };
+ 
+-static void glsl_vertex_pipe_vp_enable(const struct wined3d_context *context, BOOL enable) {}
++static void glsl_vertex_pipe_vp_apply_draw_state(const struct wined3d_context *context, const struct wined3d_state *state) {}
+ 
+ static void glsl_vertex_pipe_vp_disable(const struct wined3d_context *context) {}
+ 
+@@ -12051,7 +12051,7 @@ static const struct wined3d_state_entry_template glsl_vertex_pipe_vp_states[] =
+  *   - Implement vertex tweening. */
+ const struct wined3d_vertex_pipe_ops glsl_vertex_pipe =
+ {
+-    .vp_enable = glsl_vertex_pipe_vp_enable,
++    .vp_apply_draw_state = glsl_vertex_pipe_vp_apply_draw_state,
+     .vp_disable = glsl_vertex_pipe_vp_disable,
+     .vp_get_caps = glsl_vertex_pipe_vp_get_caps,
+     .vp_get_emul_mask = glsl_vertex_pipe_vp_get_emul_mask,
+@@ -12060,7 +12060,8 @@ const struct wined3d_vertex_pipe_ops glsl_vertex_pipe =
+     .vp_states = glsl_vertex_pipe_vp_states,
+ };
+ 
+-static void glsl_fragment_pipe_enable(const struct wined3d_context *context, BOOL enable)
++static void glsl_fragment_pipe_apply_draw_state(
++        const struct wined3d_context *context, const struct wined3d_state *state)
+ {
+     /* Nothing to do. */
+ }
+@@ -12428,7 +12429,7 @@ static void glsl_fragment_pipe_free_context_data(struct wined3d_context *context
+ 
+ const struct wined3d_fragment_pipe_ops glsl_fragment_pipe =
+ {
+-    .fp_enable = glsl_fragment_pipe_enable,
++    .fp_apply_draw_state = glsl_fragment_pipe_apply_draw_state,
+     .fp_disable = glsl_fragment_pipe_disable,
+     .get_caps = glsl_fragment_pipe_get_caps,
+     .get_emul_mask = glsl_fragment_pipe_get_emul_mask,
+diff --git a/dlls/wined3d/nvidia_texture_shader.c b/dlls/wined3d/nvidia_texture_shader.c
+index 14510b25f0e6..c68dc42b690d 100644
+--- a/dlls/wined3d/nvidia_texture_shader.c
++++ b/dlls/wined3d/nvidia_texture_shader.c
+@@ -660,11 +660,11 @@ static void nvrc_texfactor(struct wined3d_context *context, const struct wined3d
+ }
+ 
+ /* Context activation is done by the caller. */
+-static void nvrc_enable(const struct wined3d_context *context, BOOL enable)
++static void nvrc_apply_draw_state(const struct wined3d_context *context, const struct wined3d_state *state)
+ {
+     const struct wined3d_gl_info *gl_info = wined3d_context_gl_const(context)->gl_info;
+ 
+-    if (enable)
++    if (!use_ps(state))
+     {
+         gl_info->gl_ops.gl.p_glEnable(GL_REGISTER_COMBINERS_NV);
+         checkGLcall("glEnable(GL_REGISTER_COMBINERS_NV)");
+@@ -685,12 +685,12 @@ static void nvrc_disable(const struct wined3d_context *context)
+ }
+ 
+ /* Context activation is done by the caller. */
+-static void nvts_enable(const struct wined3d_context *context, BOOL enable)
++static void nvts_apply_draw_state(const struct wined3d_context *context, const struct wined3d_state *state)
+ {
+     const struct wined3d_gl_info *gl_info = wined3d_context_gl_const(context)->gl_info;
+ 
+-    nvrc_enable(context, enable);
+-    if (enable)
++    nvrc_apply_draw_state(context, state);
++    if (!use_ps(state))
+     {
+         gl_info->gl_ops.gl.p_glEnable(GL_TEXTURE_SHADER_NV);
+         checkGLcall("glEnable(GL_TEXTURE_SHADER_NV)");
+@@ -948,7 +948,7 @@ static void nvrc_context_free(struct wined3d_context *context)
+ 
+ const struct wined3d_fragment_pipe_ops nvts_fragment_pipeline =
+ {
+-    .fp_enable = nvts_enable,
++    .fp_apply_draw_state = nvts_apply_draw_state,
+     .fp_disable = nvts_disable,
+     .get_caps = nvrc_fragment_get_caps,
+     .get_emul_mask = nvrc_fragment_get_emul_mask,
+@@ -962,7 +962,7 @@ const struct wined3d_fragment_pipe_ops nvts_fragment_pipeline =
+ 
+ const struct wined3d_fragment_pipe_ops nvrc_fragment_pipeline =
+ {
+-    .fp_enable = nvrc_enable,
++    .fp_apply_draw_state = nvrc_apply_draw_state,
+     .fp_disable = nvrc_disable,
+     .get_caps = nvrc_fragment_get_caps,
+     .get_emul_mask = nvrc_fragment_get_emul_mask,
+diff --git a/dlls/wined3d/shader.c b/dlls/wined3d/shader.c
+index 72c1158f5ba7..6b41bf5ebc50 100644
+--- a/dlls/wined3d/shader.c
++++ b/dlls/wined3d/shader.c
+@@ -1943,8 +1943,8 @@ static void shader_none_apply_draw_state(void *shader_priv, struct wined3d_conte
+ {
+     struct shader_none_priv *priv = shader_priv;
+ 
+-    priv->vertex_pipe->vp_enable(context, !use_vs(state));
+-    priv->fragment_pipe->fp_enable(context, !use_ps(state));
++    priv->vertex_pipe->vp_apply_draw_state(context, state);
++    priv->fragment_pipe->fp_apply_draw_state(context, state);
+ }
+ 
+ /* Context activation is done by the caller. */
+diff --git a/dlls/wined3d/shader_spirv.c b/dlls/wined3d/shader_spirv.c
+index 40c1a9f80ae1..70affa1558ea 100644
+--- a/dlls/wined3d/shader_spirv.c
++++ b/dlls/wined3d/shader_spirv.c
+@@ -826,8 +826,8 @@ static void shader_spirv_apply_draw_state(void *shader_priv, struct wined3d_cont
+     enum wined3d_shader_type shader_type;
+     struct wined3d_shader *shader;
+ 
+-    priv->vertex_pipe->vp_enable(context, !use_vs(state));
+-    priv->fragment_pipe->fp_enable(context, !use_ps(state));
++    priv->vertex_pipe->vp_apply_draw_state(context, state);
++    priv->fragment_pipe->fp_apply_draw_state(context, state);
+ 
+     bindings = &priv->bindings;
+     memcpy(binding_base, bindings->binding_base, sizeof(bindings->binding_base));
+@@ -1136,7 +1136,7 @@ const struct wined3d_shader_backend_ops *wined3d_spirv_shader_backend_init_vk(vo
+     return &spirv_shader_backend_vk;
+ }
+ 
+-static void spirv_vertex_pipe_vk_vp_enable(const struct wined3d_context *context, BOOL enable)
++static void spirv_vertex_pipe_vk_vp_apply_draw_state(const struct wined3d_context *context, const struct wined3d_state *state)
+ {
+     /* Nothing to do. */
+ }
+@@ -1204,7 +1204,7 @@ static const struct wined3d_state_entry_template spirv_vertex_pipe_vk_vp_states[
+ 
+ static const struct wined3d_vertex_pipe_ops spirv_vertex_pipe_vk =
+ {
+-    .vp_enable = spirv_vertex_pipe_vk_vp_enable,
++    .vp_apply_draw_state = spirv_vertex_pipe_vk_vp_apply_draw_state,
+     .vp_disable = spirv_vertex_pipe_vk_vp_disable,
+     .vp_get_caps = spirv_vertex_pipe_vk_vp_get_caps,
+     .vp_get_emul_mask = spirv_vertex_pipe_vk_vp_get_emul_mask,
+@@ -1218,7 +1218,8 @@ const struct wined3d_vertex_pipe_ops *wined3d_spirv_vertex_pipe_init_vk(void)
+     return &spirv_vertex_pipe_vk;
+ }
+ 
+-static void spirv_fragment_pipe_vk_fp_enable(const struct wined3d_context *context, BOOL enable)
++static void spirv_fragment_pipe_vk_fp_apply_draw_state(
++        const struct wined3d_context *context, const struct wined3d_state *state)
+ {
+     /* Nothing to do. */
+ }
+@@ -1289,7 +1290,7 @@ static const struct wined3d_state_entry_template spirv_fragment_pipe_vk_fp_state
+ 
+ static const struct wined3d_fragment_pipe_ops spirv_fragment_pipe_vk =
+ {
+-    .fp_enable = spirv_fragment_pipe_vk_fp_enable,
++    .fp_apply_draw_state = spirv_fragment_pipe_vk_fp_apply_draw_state,
+     .fp_disable = spirv_fragment_pipe_vk_fp_disable,
+     .get_caps = spirv_fragment_pipe_vk_fp_get_caps,
+     .get_emul_mask = spirv_fragment_pipe_vk_fp_get_emul_mask,
+diff --git a/dlls/wined3d/wined3d_private.h b/dlls/wined3d/wined3d_private.h
+index 04e86004f282..74c0ea52f3a0 100644
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -2001,7 +2001,7 @@ struct wined3d_state_entry_template
+ 
+ struct wined3d_fragment_pipe_ops
+ {
+-    void (*fp_enable)(const struct wined3d_context *context, BOOL enable);
++    void (*fp_apply_draw_state)(const struct wined3d_context *context, const struct wined3d_state *state);
+     void (*fp_disable)(const struct wined3d_context *context);
+     void (*get_caps)(const struct wined3d_adapter *adapter, struct fragment_caps *caps);
+     unsigned int (*get_emul_mask)(const struct wined3d_adapter *adapter);
+@@ -2029,7 +2029,7 @@ struct wined3d_vertex_caps
+ 
+ struct wined3d_vertex_pipe_ops
+ {
+-    void (*vp_enable)(const struct wined3d_context *context, BOOL enable);
++    void (*vp_apply_draw_state)(const struct wined3d_context *context, const struct wined3d_state *state);
+     void (*vp_disable)(const struct wined3d_context *context);
+     void (*vp_get_caps)(const struct wined3d_adapter *adapter, struct wined3d_vertex_caps *caps);
+     unsigned int (*vp_get_emul_mask)(const struct wined3d_adapter *adapter);
+-- 
+2.43.0
+

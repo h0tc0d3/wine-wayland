@@ -1,0 +1,39 @@
+From f598bcecef77b4a9d2bb40df23627c81b431e2a0 Mon Sep 17 00:00:00 2001
+From: Anton Baskanov <baskanov@gmail.com>
+Date: Fri, 9 Feb 2024 14:37:20 +0700
+Subject: [PATCH 09/27] winex11.drv: Call
+ X11DRV_DisplayDevices_RegisterEventHandlers in x11drv_init.
+
+Otherwise, RRNotify events will only be handled in the explorer process.
+---
+ dlls/winex11.drv/window.c      | 1 -
+ dlls/winex11.drv/x11drv_main.c | 1 +
+ 2 files changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/dlls/winex11.drv/window.c b/dlls/winex11.drv/window.c
+index 8ab694450ef1..2074914abb18 100644
+--- a/dlls/winex11.drv/window.c
++++ b/dlls/winex11.drv/window.c
+@@ -2058,7 +2058,6 @@ BOOL X11DRV_CreateWindow( HWND hwnd )
+                                            CWOverrideRedirect | CWEventMask, &attr );
+         XFlush( data->display );
+         NtUserSetProp( hwnd, clip_window_prop, (HANDLE)data->clip_window );
+-        X11DRV_DisplayDevices_RegisterEventHandlers();
+     }
+     return TRUE;
+ }
+diff --git a/dlls/winex11.drv/x11drv_main.c b/dlls/winex11.drv/x11drv_main.c
+index 25a36cb8c0cc..9b4c5d3f5844 100644
+--- a/dlls/winex11.drv/x11drv_main.c
++++ b/dlls/winex11.drv/x11drv_main.c
+@@ -705,6 +705,7 @@ static NTSTATUS x11drv_init( void *arg )
+ 
+     init_user_driver();
+     X11DRV_DisplayDevices_Init(FALSE);
++    X11DRV_DisplayDevices_RegisterEventHandlers();
+     return STATUS_SUCCESS;
+ }
+ 
+-- 
+2.43.0
+

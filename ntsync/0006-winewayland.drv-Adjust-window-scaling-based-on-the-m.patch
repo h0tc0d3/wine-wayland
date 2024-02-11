@@ -1,0 +1,211 @@
+From 4200cd6a1f1a4a3a3d727dcfdd357ca0a4b3bfd8 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Thu, 25 Jan 2024 15:21:22 +0200
+Subject: [PATCH 06/27] winewayland.drv: Adjust window scaling based on the
+ monitor display mode.
+
+Emulate the visual effect of a display mode change, by scaling the window according
+to the ratios of the native vs current mode.
+
+We provide the adapter scaling information to the driver as part of the adapter
+driver data so it's consistent across all processes.
+---
+ dlls/win32u/main.c                |  6 ++++++
+ dlls/win32u/sysparams.c           | 17 +++++++++++++++++
+ dlls/win32u/win32syscalls.h       | 14 ++++++++------
+ dlls/win32u/win32u.spec           |  1 +
+ dlls/winewayland.drv/display.c    |  9 ++++-----
+ dlls/winewayland.drv/waylanddrv.h |  7 +++++++
+ dlls/winewayland.drv/window.c     | 17 +++++++++++++++++
+ dlls/wow64win/user.c              |  6 ++++++
+ include/ntuser.h                  |  1 +
+ 9 files changed, 67 insertions(+), 11 deletions(-)
+
+diff --git a/dlls/win32u/main.c b/dlls/win32u/main.c
+index 2dc66e5df11d..432f3fa892af 100644
+--- a/dlls/win32u/main.c
++++ b/dlls/win32u/main.c
+@@ -2140,6 +2140,12 @@ HWND SYSCALL_API NtUserWindowFromPoint( LONG x, LONG y )
+     __ASM_SYSCALL_FUNC( __id_NtUserWindowFromPoint );
+ }
+ 
++BOOL SYSCALL_API __wine_get_adapter_driver_data( UNICODE_STRING *devname,
++                                                 void *data, UINT *data_len )
++{
++    __ASM_SYSCALL_FUNC( __id___wine_get_adapter_driver_data );
++}
++
+ BOOL SYSCALL_API __wine_get_file_outline_text_metric( const WCHAR *path, TEXTMETRICW *otm,
+                                                       UINT *em_square, WCHAR *face_name )
+ {
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+index 8917676b00fd..34cbd835cbff 100644
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -6631,3 +6631,20 @@ NTSTATUS WINAPI NtUserDisplayConfigGetDeviceInfo( DISPLAYCONFIG_DEVICE_INFO_HEAD
+         return STATUS_INVALID_PARAMETER;
+     }
+ }
++
++void WINAPI __wine_get_adapter_driver_data( UNICODE_STRING *devname, void *data, UINT *data_len )
++{
++    struct adapter *adapter;
++
++    if ((adapter = find_adapter( devname )))
++    {
++        *data_len = min( *data_len, adapter->driver_data_len );
++        if (data && adapter->driver_data)
++            memcpy( data, adapter->driver_data, *data_len );
++        adapter_release( adapter );
++    }
++    else
++    {
++        *data_len = 0;
++    }
++}
+diff --git a/dlls/win32u/win32syscalls.h b/dlls/win32u/win32syscalls.h
+index 543583356d96..3772dd61ef21 100644
+--- a/dlls/win32u/win32syscalls.h
++++ b/dlls/win32u/win32syscalls.h
+@@ -399,9 +399,10 @@
+     SYSCALL_ENTRY( 0x018b, NtUserWaitMessage, 0 ) \
+     SYSCALL_ENTRY( 0x018c, NtUserWindowFromDC, 4 ) \
+     SYSCALL_ENTRY( 0x018d, NtUserWindowFromPoint, 8 ) \
+-    SYSCALL_ENTRY( 0x018e, __wine_get_file_outline_text_metric, 16 ) \
+-    SYSCALL_ENTRY( 0x018f, __wine_get_icm_profile, 16 ) \
+-    SYSCALL_ENTRY( 0x0190, __wine_send_input, 12 )
++    SYSCALL_ENTRY( 0x018e, __wine_get_adapter_driver_data, 12 ) \
++    SYSCALL_ENTRY( 0x018f, __wine_get_file_outline_text_metric, 16 ) \
++    SYSCALL_ENTRY( 0x0190, __wine_get_icm_profile, 16 ) \
++    SYSCALL_ENTRY( 0x0191, __wine_send_input, 12 )
+ 
+ #define ALL_SYSCALLS64 \
+     SYSCALL_ENTRY( 0x0000, NtGdiAbortDoc, 8 ) \
+@@ -802,6 +803,7 @@
+     SYSCALL_ENTRY( 0x018b, NtUserWaitMessage, 0 ) \
+     SYSCALL_ENTRY( 0x018c, NtUserWindowFromDC, 8 ) \
+     SYSCALL_ENTRY( 0x018d, NtUserWindowFromPoint, 16 ) \
+-    SYSCALL_ENTRY( 0x018e, __wine_get_file_outline_text_metric, 32 ) \
+-    SYSCALL_ENTRY( 0x018f, __wine_get_icm_profile, 32 ) \
+-    SYSCALL_ENTRY( 0x0190, __wine_send_input, 24 )
++    SYSCALL_ENTRY( 0x018e, __wine_get_adapter_driver_data, 24 ) \
++    SYSCALL_ENTRY( 0x018f, __wine_get_file_outline_text_metric, 32 ) \
++    SYSCALL_ENTRY( 0x0190, __wine_get_icm_profile, 32 ) \
++    SYSCALL_ENTRY( 0x0191, __wine_send_input, 24 )
+diff --git a/dlls/win32u/win32u.spec b/dlls/win32u/win32u.spec
+index 24dccb6ec1df..18c973941e16 100644
+--- a/dlls/win32u/win32u.spec
++++ b/dlls/win32u/win32u.spec
+@@ -1323,3 +1323,4 @@
+ @ stdcall -syscall __wine_get_icm_profile(long long ptr ptr)
+ @ stdcall -syscall __wine_get_file_outline_text_metric(wstr ptr ptr ptr)
+ @ stdcall -syscall __wine_send_input(long ptr ptr)
++@ stdcall -syscall __wine_get_adapter_driver_data(ptr ptr ptr)
+diff --git a/dlls/winewayland.drv/display.c b/dlls/winewayland.drv/display.c
+index ab7f75996599..eba592a585e5 100644
+--- a/dlls/winewayland.drv/display.c
++++ b/dlls/winewayland.drv/display.c
+@@ -47,11 +47,6 @@ void wayland_init_display_devices(BOOL force)
+     NtUserGetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &num_path, &num_mode);
+ }
+ 
+-struct wayland_adapter_data
+-{
+-    char output_name[64];
+-};
+-
+ struct output_info
+ {
+     int x, y;
+@@ -230,6 +225,10 @@ static void wayland_add_device_adapter(const struct gdi_device_manager *device_m
+         adapter.state_flags |= DISPLAY_DEVICE_PRIMARY_DEVICE;
+ 
+     lstrcpynA(data.output_name, output_info->output->name, sizeof(data.output_name));
++    data.scale_width = ((double)output_info->output->current_mode->width) /
++                       output_info->mode->width;
++    data.scale_height = ((double)output_info->output->current_mode->height) /
++                        output_info->mode->height;
+     adapter.driver_data = &data;
+     adapter.driver_data_len = sizeof(data);
+ 
+diff --git a/dlls/winewayland.drv/waylanddrv.h b/dlls/winewayland.drv/waylanddrv.h
+index f030f6fc6a09..6c6df5916975 100644
+--- a/dlls/winewayland.drv/waylanddrv.h
++++ b/dlls/winewayland.drv/waylanddrv.h
+@@ -216,6 +216,13 @@ struct wayland_shm_buffer
+     HRGN damage_region;
+ };
+ 
++struct wayland_adapter_data
++{
++    char output_name[64];
++    /* How much larger the native mode is compared to current mode. */
++    double scale_width, scale_height;
++};
++
+ /**********************************************************************
+  *          Wayland initialization
+  */
+diff --git a/dlls/winewayland.drv/window.c b/dlls/winewayland.drv/window.c
+index ac5da371e5cb..ae63b66b83e8 100644
+--- a/dlls/winewayland.drv/window.c
++++ b/dlls/winewayland.drv/window.c
+@@ -162,6 +162,8 @@ static void wayland_win_data_get_config(struct wayland_win_data *data,
+                                         struct wayland_window_config *conf)
+ {
+     enum wayland_surface_config_state window_state = 0;
++    MONITORINFOEXW mi = {.cbSize = sizeof(mi)};
++    HMONITOR hmon;
+     DWORD style;
+ 
+     conf->rect = data->window_rect;
+@@ -187,6 +189,21 @@ static void wayland_win_data_get_config(struct wayland_win_data *data,
+     conf->scale = NtUserGetDpiForWindow(data->hwnd) / 96.0;
+     conf->visible = (style & WS_VISIBLE) == WS_VISIBLE;
+     conf->managed = data->managed;
++
++    /* Adjust the window scale for the current display mode. */
++    if ((hmon = NtUserMonitorFromWindow(data->hwnd, MONITOR_DEFAULTTOPRIMARY)) &&
++        NtUserGetMonitorInfo(hmon, (MONITORINFO *)&mi))
++    {
++        struct wayland_adapter_data adapter_data;
++        UINT adapter_data_len = sizeof(adapter_data);
++        UNICODE_STRING dev;
++
++        RtlInitUnicodeString(&dev, mi.szDevice);
++        __wine_get_adapter_driver_data(&dev, &adapter_data, &adapter_data_len);
++
++        if (adapter_data_len == sizeof(adapter_data))
++            conf->scale /= min(adapter_data.scale_width, adapter_data.scale_height);
++    }
+ }
+ 
+ static void wayland_win_data_update_wayland_surface(struct wayland_win_data *data)
+diff --git a/dlls/wow64win/user.c b/dlls/wow64win/user.c
+index 2dd811578f53..446856eeccee 100644
+--- a/dlls/wow64win/user.c
++++ b/dlls/wow64win/user.c
+@@ -4874,3 +4874,9 @@ NTSTATUS WINAPI wow64___wine_send_input( UINT *args )
+     ERR( "not supported\n" );
+     return 0;
+ }
++
++NTSTATUS WINAPI wow64___wine_get_adapter_driver_data( UINT *args )
++{
++    ERR( "not supported\n" );
++    return 0;
++}
+diff --git a/include/ntuser.h b/include/ntuser.h
+index 31b93ef36e99..70f46bf14b6f 100644
+--- a/include/ntuser.h
++++ b/include/ntuser.h
+@@ -1406,5 +1406,6 @@ static inline BOOL NtUserShowOwnedPopups( HWND hwnd, BOOL show )
+ 
+ /* Wine extensions */
+ W32KAPI BOOL WINAPI __wine_send_input( HWND hwnd, const INPUT *input, const RAWINPUT *rawinput );
++W32KAPI void WINAPI __wine_get_adapter_driver_data( UNICODE_STRING *devname, void *data, UINT *data_len );
+ 
+ #endif /* _NTUSER_ */
+-- 
+2.43.0
+

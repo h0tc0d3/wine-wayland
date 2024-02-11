@@ -1,0 +1,188 @@
+From e21aa4ddb6251a94d65f7385ed4754713457e011 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 22 Jan 2024 19:34:47 -0600
+Subject: [PATCH 20/27] ntdll: Avoid sending context in wait_suspend() when not
+ required.
+
+---
+ dlls/ntdll/unix/server.c        |  7 ++++---
+ dlls/ntdll/unix/signal_arm.c    |  2 ++
+ dlls/ntdll/unix/signal_arm64.c  |  2 ++
+ dlls/ntdll/unix/signal_i386.c   |  2 ++
+ dlls/ntdll/unix/signal_x86_64.c |  2 ++
+ dlls/ntdll/unix/thread.c        | 12 +++++++-----
+ dlls/ntdll/unix/unix_private.h  |  2 +-
+ server/protocol.def             |  1 +
+ server/thread.c                 |  8 ++++++++
+ 9 files changed, 29 insertions(+), 9 deletions(-)
+
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index 88ac9551060f..6effc222dcd1 100644
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -693,7 +693,6 @@ unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT
+     unsigned int ret;
+     int cookie;
+     obj_handle_t apc_handle = 0;
+-    BOOL suspend_context = !!context;
+     apc_result_t result;
+     sigset_t old_set;
+     int signaled;
+@@ -704,6 +703,8 @@ unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT
+         context_t  context[2];
+     } reply_data;
+ 
++    assert(!context || (flags & SELECT_SUSPEND));
++
+     memset( &result, 0, sizeof(result) );
+ 
+     do
+@@ -720,11 +721,11 @@ unsigned int server_select( const select_op_t *select_op, data_size_t size, UINT
+                 req->size     = size;
+                 wine_server_add_data( req, &result, sizeof(result) );
+                 wine_server_add_data( req, select_op, size );
+-                if (suspend_context)
++                if (context && flags & SELECT_SUSPEND)
+                 {
+                     data_size_t ctx_size = (context[1].machine ? 2 : 1) * sizeof(*context);
+                     wine_server_add_data( req, context, ctx_size );
+-                    suspend_context = FALSE; /* server owns the context now */
++                    flags &= ~SELECT_SUSPEND;  /* server owns the context now */
+                 }
+                 wine_server_set_reply( req, &reply_data,
+                                        context ? sizeof(reply_data) : sizeof(reply_data.call) );
+diff --git a/dlls/ntdll/unix/signal_arm.c b/dlls/ntdll/unix/signal_arm.c
+index 0f6f81d2ee19..3bc055f58f77 100644
+--- a/dlls/ntdll/unix/signal_arm.c
++++ b/dlls/ntdll/unix/signal_arm.c
+@@ -1448,6 +1448,8 @@ static void usr1_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+ {
+     CONTEXT context;
+ 
++    if (wait_suspend( NULL ) != STATUS_MORE_PROCESSING_REQUIRED) return;
++
+     if (is_inside_syscall( sigcontext ))
+     {
+         context.ContextFlags = CONTEXT_FULL;
+diff --git a/dlls/ntdll/unix/signal_arm64.c b/dlls/ntdll/unix/signal_arm64.c
+index bc5b8f0b88a3..efe20a9ee755 100644
+--- a/dlls/ntdll/unix/signal_arm64.c
++++ b/dlls/ntdll/unix/signal_arm64.c
+@@ -1219,6 +1219,8 @@ static void usr1_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+ {
+     CONTEXT context;
+ 
++    if (wait_suspend( NULL ) != STATUS_MORE_PROCESSING_REQUIRED) return;
++
+     if (is_inside_syscall( sigcontext ))
+     {
+         context.ContextFlags = CONTEXT_FULL;
+diff --git a/dlls/ntdll/unix/signal_i386.c b/dlls/ntdll/unix/signal_i386.c
+index cd6417b57b46..541e81915584 100644
+--- a/dlls/ntdll/unix/signal_i386.c
++++ b/dlls/ntdll/unix/signal_i386.c
+@@ -2129,6 +2129,8 @@ static void usr1_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+     struct xcontext xcontext;
+ 
+     init_handler( sigcontext );
++    if (wait_suspend( NULL ) != STATUS_MORE_PROCESSING_REQUIRED) return;
++
+     if (is_inside_syscall( sigcontext ))
+     {
+         DECLSPEC_ALIGN(64) XSTATE xs;
+diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+index 405ac49e5a38..2468631a3cda 100644
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -2151,6 +2151,8 @@ static void usr1_handler( int signal, siginfo_t *siginfo, void *sigcontext )
+     ucontext_t *ucontext = init_handler( sigcontext );
+     struct xcontext context;
+ 
++    if (wait_suspend( NULL ) != STATUS_MORE_PROCESSING_REQUIRED) return;
++
+     if (is_inside_syscall( ucontext ))
+     {
+         DECLSPEC_ALIGN(64) XSTATE xs;
+diff --git a/dlls/ntdll/unix/thread.c b/dlls/ntdll/unix/thread.c
+index 52cb0f26e970..3b4a6269e492 100644
+--- a/dlls/ntdll/unix/thread.c
++++ b/dlls/ntdll/unix/thread.c
+@@ -1458,16 +1458,18 @@ void exit_process( int status )
+  *
+  * Wait until the thread is no longer suspended.
+  */
+-void wait_suspend( CONTEXT *context )
++NTSTATUS wait_suspend( CONTEXT *context )
+ {
+     int saved_errno = errno;
+     context_t server_contexts[2];
++    NTSTATUS status;
+ 
+-    contexts_to_server( server_contexts, context );
++    if (context) contexts_to_server( server_contexts, context );
+     /* wait with 0 timeout, will only return once the thread is no longer suspended */
+-    server_select( NULL, 0, SELECT_INTERRUPTIBLE, 0, server_contexts, NULL );
+-    contexts_from_server( context, server_contexts );
++    status = server_select( NULL, 0, SELECT_INTERRUPTIBLE | SELECT_SUSPEND, 0, context ? server_contexts : NULL, NULL );
++    if (context) contexts_from_server( context, server_contexts );
+     errno = saved_errno;
++    return status;
+ }
+ 
+ 
+@@ -1513,7 +1515,7 @@ NTSTATUS send_debug_event( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_c
+         select_op.wait.handles[0] = handle;
+ 
+         contexts_to_server( server_contexts, context );
+-        server_select( &select_op, offsetof( select_op_t, wait.handles[1] ), SELECT_INTERRUPTIBLE,
++        server_select( &select_op, offsetof( select_op_t, wait.handles[1] ), SELECT_INTERRUPTIBLE | SELECT_SUSPEND,
+                        TIMEOUT_INFINITE, server_contexts, NULL );
+ 
+         SERVER_START_REQ( get_exception_status )
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index cbf72651a9a3..ed931d1fbd7a 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -220,7 +220,7 @@ extern NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_siz
+ extern void DECLSPEC_NORETURN abort_thread( int status );
+ extern void DECLSPEC_NORETURN abort_process( int status );
+ extern void DECLSPEC_NORETURN exit_process( int status );
+-extern void wait_suspend( CONTEXT *context );
++extern NTSTATUS wait_suspend( CONTEXT *context );
+ extern NTSTATUS send_debug_event( EXCEPTION_RECORD *rec, CONTEXT *context, BOOL first_chance );
+ extern NTSTATUS set_thread_context( HANDLE handle, const void *context, BOOL *self, USHORT machine );
+ extern NTSTATUS get_thread_context( HANDLE handle, void *context, BOOL *self, USHORT machine );
+diff --git a/server/protocol.def b/server/protocol.def
+index 8b51618ebe00..747fb9a9d652 100644
+--- a/server/protocol.def
++++ b/server/protocol.def
+@@ -1222,6 +1222,7 @@ typedef struct
+ @END
+ #define SELECT_ALERTABLE     1
+ #define SELECT_INTERRUPTIBLE 2
++#define SELECT_SUSPEND       4
+ 
+ 
+ /* Create an event */
+diff --git a/server/thread.c b/server/thread.c
+index 56f57cefd8f0..99dda8f72879 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -1656,6 +1656,14 @@ DECL_HANDLER(select)
+         release_object( apc );
+     }
+ 
++    if (!ctx_count && current->context && req->flags & SELECT_SUSPEND)
++    {
++        /* select is called from signal and thread context is required. */
++        set_error( STATUS_MORE_PROCESSING_REQUIRED );
++        reply->signaled = 1;
++        return;
++    }
++
+     reply->signaled = select_on( &select_op, op_size, req->cookie, req->flags, req->timeout );
+ 
+     if (get_error() == STATUS_USER_APC && get_reply_max_size() >= sizeof(apc_call_t))
+-- 
+2.43.0
+

@@ -1,0 +1,379 @@
+From dd23e1f8c6afc328ded30b888a81bc0b9f540e00 Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <zfigura@codeweavers.com>
+Date: Sat, 11 Nov 2023 13:57:55 -0600
+Subject: [PATCH 14/27] wined3d: Merge shader_load_constants() into
+ shader_select().
+
+Arguably there is a benefit here in that it reduces shader backend state
+application down to a single method, although whether that is an improvement may
+be up for debate.
+
+More saliently, we would like to move FFP state application out of the state
+table and into a linear state function. In practice that function will probably
+be vp_enable / fp_enable. In that case we will need those functions, and hence
+also shader_select(), to be called when more states are dirty.
+
+This does not in itself mean that shader_load_constants() needs to be merged
+with shader_select(), but it does remove the primary impetus for keeping them
+separate.
+
+Rename to shader_apply_draw_state() to reflect the adjusted purpose, as
+suggested by Henri Verbeet.
+---
+ dlls/wined3d/arb_program_shader.c | 40 +++++++++++++++----------------
+ dlls/wined3d/context_gl.c         | 16 ++++---------
+ dlls/wined3d/context_vk.c         |  2 +-
+ dlls/wined3d/glsl_shader.c        | 38 +++++++++++++++++------------
+ dlls/wined3d/shader.c             |  7 ++----
+ dlls/wined3d/shader_spirv.c       | 11 ++-------
+ dlls/wined3d/wined3d_private.h    |  4 +---
+ 7 files changed, 54 insertions(+), 64 deletions(-)
+
+diff --git a/dlls/wined3d/arb_program_shader.c b/dlls/wined3d/arb_program_shader.c
+index eecbe1c22b11..4e856c6a616d 100644
+--- a/dlls/wined3d/arb_program_shader.c
++++ b/dlls/wined3d/arb_program_shader.c
+@@ -622,7 +622,7 @@ static void shader_arb_vs_local_constants(const struct arb_vs_compiled_shader *g
+     checkGLcall("Load vs int consts");
+ }
+ 
+-static void shader_arb_select(void *shader_priv, struct wined3d_context *context,
++static void shader_arb_apply_draw_state(void *shader_priv, struct wined3d_context *context,
+         const struct wined3d_state *state);
+ 
+ /**
+@@ -650,7 +650,7 @@ static void shader_arb_load_constants_internal(struct shader_arb_priv *priv, str
+                 && (vshader->reg_maps.integer_constants & ~vshader->reg_maps.local_int_consts))))
+         {
+             TRACE("bool/integer vertex shader constants potentially modified, forcing shader reselection.\n");
+-            shader_arb_select(priv, &context_gl->c, state);
++            shader_arb_apply_draw_state(priv, &context_gl->c, state);
+         }
+         else if (pshader
+                 && (pshader->reg_maps.boolean_constants
+@@ -658,7 +658,7 @@ static void shader_arb_load_constants_internal(struct shader_arb_priv *priv, str
+                 && (pshader->reg_maps.integer_constants & ~pshader->reg_maps.local_int_consts))))
+         {
+             TRACE("bool/integer pixel shader constants potentially modified, forcing shader reselection.\n");
+-            shader_arb_select(priv, &context_gl->c, state);
++            shader_arb_apply_draw_state(priv, &context_gl->c, state);
+         }
+     }
+ 
+@@ -714,13 +714,6 @@ static void shader_arb_load_constants_internal(struct shader_arb_priv *priv, str
+     }
+ }
+ 
+-static void shader_arb_load_constants(void *shader_priv, struct wined3d_context *context,
+-        const struct wined3d_state *state)
+-{
+-    shader_arb_load_constants_internal(shader_priv, wined3d_context_gl(context),
+-            state, use_ps(state), use_vs(state), FALSE);
+-}
+-
+ static void shader_arb_update_float_vertex_constants(struct wined3d_device *device, UINT start, UINT count)
+ {
+     struct wined3d_context_gl *context_gl = wined3d_context_gl_get_current();
+@@ -4614,12 +4607,11 @@ static void find_arb_vs_compile_args(const struct wined3d_state *state,
+ }
+ 
+ /* Context activation is done by the caller. */
+-static void shader_arb_select(void *shader_priv, struct wined3d_context *context,
+-        const struct wined3d_state *state)
++static void shader_arb_update_graphics_shaders(struct shader_arb_priv *priv,
++        struct wined3d_context *context, const struct wined3d_state *state)
+ {
+     struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+-    struct shader_arb_priv *priv = shader_priv;
+     int i;
+ 
+     /* Deal with pixel shaders first so the vertex shader arg function has the input signature ready */
+@@ -4659,7 +4651,7 @@ static void shader_arb_select(void *shader_priv, struct wined3d_context *context
+                 priv->pshader_const_dirty[i] = 1;
+             }
+             /* Also takes care of loading local constants */
+-            shader_arb_load_constants_internal(shader_priv, context_gl, state, TRUE, FALSE, TRUE);
++            shader_arb_load_constants_internal(priv, context_gl, state, TRUE, FALSE, TRUE);
+         }
+         else
+         {
+@@ -4748,6 +4740,19 @@ static void shader_arb_select(void *shader_priv, struct wined3d_context *context
+     }
+ }
+ 
++static void shader_arb_apply_draw_state(void *shader_priv, struct wined3d_context *context,
++        const struct wined3d_state *state)
++{
++    struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
++    struct shader_arb_priv *priv = shader_priv;
++
++    if (context->shader_update_mask & ~(1u << WINED3D_SHADER_TYPE_COMPUTE))
++        shader_arb_update_graphics_shaders(priv, context, state);
++
++    if (context->constant_update_mask)
++        shader_arb_load_constants_internal(priv, context_gl, state, use_ps(state), use_vs(state), FALSE);
++}
++
+ static void shader_arb_select_compute(void *shader_priv, struct wined3d_context *context,
+         const struct wined3d_state *state)
+ {
+@@ -5703,12 +5708,11 @@ const struct wined3d_shader_backend_ops arb_program_shader_backend =
+ {
+     shader_arb_handle_instruction,
+     shader_arb_precompile,
+-    shader_arb_select,
++    shader_arb_apply_draw_state,
+     shader_arb_select_compute,
+     shader_arb_disable,
+     shader_arb_update_float_vertex_constants,
+     shader_arb_update_float_pixel_constants,
+-    shader_arb_load_constants,
+     shader_arb_destroy,
+     shader_arb_alloc,
+     shader_arb_free,
+@@ -6638,10 +6642,6 @@ static void fragment_prog_arbfp(struct wined3d_context *context, const struct wi
+             desc = new_desc;
+         }
+ 
+-        /* Now activate the replacement program. GL_FRAGMENT_PROGRAM_ARB is already active (however, note the
+-         * comment above the shader_select call below). If e.g. GLSL is active, the shader_select call will
+-         * deactivate it.
+-         */
+         GL_EXTCALL(glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, desc->shader));
+         checkGLcall("glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, desc->shader)");
+ 
+diff --git a/dlls/wined3d/context_gl.c b/dlls/wined3d/context_gl.c
+index 2c3191321642..ffd56f5f770c 100644
+--- a/dlls/wined3d/context_gl.c
++++ b/dlls/wined3d/context_gl.c
+@@ -4386,12 +4386,6 @@ static BOOL context_apply_draw_state(struct wined3d_context *context,
+ 
+     memset(context->dirty_graphics_states, 0, sizeof(context->dirty_graphics_states));
+ 
+-    if (context->shader_update_mask & ~(1u << WINED3D_SHADER_TYPE_COMPUTE))
+-    {
+-        device->shader_backend->shader_select(device->shader_priv, context, state);
+-        context->shader_update_mask &= 1u << WINED3D_SHADER_TYPE_COMPUTE;
+-    }
+-
+     if (context->update_shader_resource_bindings)
+     {
+         for (i = 0; i < WINED3D_SHADER_TYPE_GRAPHICS_COUNT; ++i)
+@@ -4413,11 +4407,11 @@ static BOOL context_apply_draw_state(struct wined3d_context *context,
+     if (wined3d_settings.offscreen_rendering_mode == ORM_FBO)
+         wined3d_context_gl_check_fbo_status(context_gl, GL_FRAMEBUFFER);
+ 
+-    if (context->constant_update_mask)
+-    {
+-        device->shader_backend->shader_load_constants(device->shader_priv, context, state);
+-        context->constant_update_mask = 0;
+-    }
++    /* WINED3D_SHADER_CONST_PS_NP2_FIXUP may be set when binding shader
++     * resources, so constant loading needs to be done after that. */
++    device->shader_backend->shader_apply_draw_state(device->shader_priv, context, state);
++    context->shader_update_mask &= 1u << WINED3D_SHADER_TYPE_COMPUTE;
++    context->constant_update_mask = 0;
+ 
+     context->last_was_blit = FALSE;
+     context->last_was_ffp_blit = FALSE;
+diff --git a/dlls/wined3d/context_vk.c b/dlls/wined3d/context_vk.c
+index 29a4a4998d49..c73db4f20cd5 100644
+--- a/dlls/wined3d/context_vk.c
++++ b/dlls/wined3d/context_vk.c
+@@ -3667,7 +3667,7 @@ VkCommandBuffer wined3d_context_vk_apply_draw_state(struct wined3d_context_vk *c
+         context_vk->sample_count = VK_SAMPLE_COUNT_1_BIT;
+     if (context_vk->c.shader_update_mask & ~(1u << WINED3D_SHADER_TYPE_COMPUTE))
+     {
+-        device_vk->d.shader_backend->shader_select(device_vk->d.shader_priv, &context_vk->c, state);
++        device_vk->d.shader_backend->shader_apply_draw_state(device_vk->d.shader_priv, &context_vk->c, state);
+         if (!context_vk->graphics.vk_pipeline_layout)
+         {
+             ERR("No pipeline layout set.\n");
+diff --git a/dlls/wined3d/glsl_shader.c b/dlls/wined3d/glsl_shader.c
+index bc4053e21ded..4e9a3b3467b1 100644
+--- a/dlls/wined3d/glsl_shader.c
++++ b/dlls/wined3d/glsl_shader.c
+@@ -1513,9 +1513,8 @@ static void shader_glsl_load_color_key_constant(const struct glsl_ps_program *ps
+     GL_EXTCALL(glUniform4fv(ps->color_key_location, 2, &float_key[0].r));
+ }
+ 
+-/* Context activation is done by the caller (state handler). */
+-static void shader_glsl_load_constants(void *shader_priv, struct wined3d_context *context,
+-        const struct wined3d_state *state)
++static void shader_glsl_load_constants(struct shader_glsl_priv *priv,
++        struct wined3d_context *context, const struct wined3d_state *state)
+ {
+     const struct wined3d_shader *vshader = state->shader[WINED3D_SHADER_TYPE_VERTEX];
+     const struct wined3d_shader *pshader = state->shader[WINED3D_SHADER_TYPE_PIXEL];
+@@ -1525,7 +1524,6 @@ static void shader_glsl_load_constants(void *shader_priv, struct wined3d_context
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+     float position_fixup[4 * WINED3D_MAX_VIEWPORTS];
+     struct wined3d_device *device = context->device;
+-    struct shader_glsl_priv *priv = shader_priv;
+     unsigned int constant_version;
+     DWORD update_mask;
+     int i;
+@@ -10697,19 +10695,17 @@ static void shader_glsl_precompile(void *shader_priv, struct wined3d_shader *sha
+ }
+ 
+ /* Context activation is done by the caller. */
+-static void shader_glsl_select(void *shader_priv, struct wined3d_context *context,
+-        const struct wined3d_state *state)
++static void shader_glsl_update_graphics_program(struct shader_glsl_priv *priv,
++        struct wined3d_context_gl *context_gl, const struct wined3d_state *state)
+ {
+-    struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
+-    struct glsl_context_data *ctx_data = context->shader_backend_data;
++    struct glsl_context_data *ctx_data = context_gl->c.shader_backend_data;
+     const struct wined3d_gl_info *gl_info = context_gl->gl_info;
+-    struct shader_glsl_priv *priv = shader_priv;
+     struct glsl_shader_prog_link *glsl_program;
+     GLenum current_vertex_color_clamp;
+     GLuint program_id, prev_id;
+ 
+-    priv->vertex_pipe->vp_enable(context, !use_vs(state));
+-    priv->fragment_pipe->fp_enable(context, !use_ps(state));
++    priv->vertex_pipe->vp_enable(&context_gl->c, !use_vs(state));
++    priv->fragment_pipe->fp_enable(&context_gl->c, !use_ps(state));
+ 
+     prev_id = ctx_data->glsl_program ? ctx_data->glsl_program->id : 0;
+     set_glsl_shader_program(context_gl, state, priv, ctx_data);
+@@ -10750,10 +10746,23 @@ static void shader_glsl_select(void *shader_priv, struct wined3d_context *contex
+         checkGLcall("glUseProgram");
+ 
+         if (glsl_program)
+-            context->constant_update_mask |= glsl_program->constant_update_mask;
++            context_gl->c.constant_update_mask |= glsl_program->constant_update_mask;
+     }
+ 
+-    context->shader_update_mask |= (1u << WINED3D_SHADER_TYPE_COMPUTE);
++    context_gl->c.shader_update_mask |= (1u << WINED3D_SHADER_TYPE_COMPUTE);
++}
++
++static void shader_glsl_apply_draw_state(void *shader_priv, struct wined3d_context *context,
++        const struct wined3d_state *state)
++{
++    struct wined3d_context_gl *context_gl = wined3d_context_gl(context);
++    struct shader_glsl_priv *priv = shader_priv;
++
++    if (context->shader_update_mask & ~(1u << WINED3D_SHADER_TYPE_COMPUTE))
++        shader_glsl_update_graphics_program(priv, context_gl, state);
++
++    if (context->constant_update_mask)
++        shader_glsl_load_constants(priv, context, state);
+ }
+ 
+ /* Context activation is done by the caller. */
+@@ -11538,12 +11547,11 @@ const struct wined3d_shader_backend_ops glsl_shader_backend =
+ {
+     shader_glsl_handle_instruction,
+     shader_glsl_precompile,
+-    shader_glsl_select,
++    shader_glsl_apply_draw_state,
+     shader_glsl_select_compute,
+     shader_glsl_disable,
+     shader_glsl_update_float_vertex_constants,
+     shader_glsl_update_float_pixel_constants,
+-    shader_glsl_load_constants,
+     shader_glsl_destroy,
+     shader_glsl_alloc,
+     shader_glsl_free,
+diff --git a/dlls/wined3d/shader.c b/dlls/wined3d/shader.c
+index 91105a43a91d..b72a3df87376 100644
+--- a/dlls/wined3d/shader.c
++++ b/dlls/wined3d/shader.c
+@@ -1933,14 +1933,12 @@ static void shader_none_select_compute(void *shader_priv, struct wined3d_context
+         const struct wined3d_state *state) {}
+ static void shader_none_update_float_vertex_constants(struct wined3d_device *device, UINT start, UINT count) {}
+ static void shader_none_update_float_pixel_constants(struct wined3d_device *device, UINT start, UINT count) {}
+-static void shader_none_load_constants(void *shader_priv, struct wined3d_context *context,
+-        const struct wined3d_state *state) {}
+ static void shader_none_destroy(struct wined3d_shader *shader) {}
+ static void shader_none_free_context_data(struct wined3d_context *context) {}
+ static void shader_none_init_context_state(struct wined3d_context *context) {}
+ 
+ /* Context activation is done by the caller. */
+-static void shader_none_select(void *shader_priv, struct wined3d_context *context,
++static void shader_none_apply_draw_state(void *shader_priv, struct wined3d_context *context,
+         const struct wined3d_state *state)
+ {
+     struct shader_none_priv *priv = shader_priv;
+@@ -2036,12 +2034,11 @@ const struct wined3d_shader_backend_ops none_shader_backend =
+ {
+     shader_none_handle_instruction,
+     shader_none_precompile,
+-    shader_none_select,
++    shader_none_apply_draw_state,
+     shader_none_select_compute,
+     shader_none_disable,
+     shader_none_update_float_vertex_constants,
+     shader_none_update_float_pixel_constants,
+-    shader_none_load_constants,
+     shader_none_destroy,
+     shader_none_alloc,
+     shader_none_free,
+diff --git a/dlls/wined3d/shader_spirv.c b/dlls/wined3d/shader_spirv.c
+index ad34856ab5de..1eac7373ee35 100644
+--- a/dlls/wined3d/shader_spirv.c
++++ b/dlls/wined3d/shader_spirv.c
+@@ -814,7 +814,7 @@ static void shader_spirv_precompile(void *shader_priv, struct wined3d_shader *sh
+     shader_spirv_scan_shader(shader, &program_vk->descriptor_info, &program_vk->signature_info);
+ }
+ 
+-static void shader_spirv_select(void *shader_priv, struct wined3d_context *context,
++static void shader_spirv_apply_draw_state(void *shader_priv, struct wined3d_context *context,
+         const struct wined3d_state *state)
+ {
+     struct wined3d_context_vk *context_vk = wined3d_context_vk(context);
+@@ -926,12 +926,6 @@ static void shader_spirv_update_float_pixel_constants(struct wined3d_device *dev
+     WARN("Not implemented.\n");
+ }
+ 
+-static void shader_spirv_load_constants(void *shader_priv, struct wined3d_context *context,
+-        const struct wined3d_state *state)
+-{
+-    WARN("Not implemented.\n");
+-}
+-
+ static void shader_spirv_invalidate_compute_program(struct wined3d_context_vk *context_vk,
+         const struct shader_spirv_compute_program_vk *program)
+ {
+@@ -1119,12 +1113,11 @@ static const struct wined3d_shader_backend_ops spirv_shader_backend_vk =
+ {
+     .shader_handle_instruction = shader_spirv_handle_instruction,
+     .shader_precompile = shader_spirv_precompile,
+-    .shader_select = shader_spirv_select,
++    .shader_apply_draw_state = shader_spirv_apply_draw_state,
+     .shader_select_compute = shader_spirv_select_compute,
+     .shader_disable = shader_spirv_disable,
+     .shader_update_float_vertex_constants = shader_spirv_update_float_vertex_constants,
+     .shader_update_float_pixel_constants = shader_spirv_update_float_pixel_constants,
+-    .shader_load_constants = shader_spirv_load_constants,
+     .shader_destroy = shader_spirv_destroy,
+     .shader_alloc_private = shader_spirv_alloc,
+     .shader_free_private = shader_spirv_free,
+diff --git a/dlls/wined3d/wined3d_private.h b/dlls/wined3d/wined3d_private.h
+index 474a31a9206d..033e0d6b9dc7 100644
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -1542,15 +1542,13 @@ struct wined3d_shader_backend_ops
+ {
+     void (*shader_handle_instruction)(const struct wined3d_shader_instruction *);
+     void (*shader_precompile)(void *shader_priv, struct wined3d_shader *shader);
+-    void (*shader_select)(void *shader_priv, struct wined3d_context *context,
++    void (*shader_apply_draw_state)(void *shader_priv, struct wined3d_context *context,
+             const struct wined3d_state *state);
+     void (*shader_select_compute)(void *shader_priv, struct wined3d_context *context,
+             const struct wined3d_state *state);
+     void (*shader_disable)(void *shader_priv, struct wined3d_context *context);
+     void (*shader_update_float_vertex_constants)(struct wined3d_device *device, UINT start, UINT count);
+     void (*shader_update_float_pixel_constants)(struct wined3d_device *device, UINT start, UINT count);
+-    void (*shader_load_constants)(void *shader_priv, struct wined3d_context *context,
+-            const struct wined3d_state *state);
+     void (*shader_destroy)(struct wined3d_shader *shader);
+     HRESULT (*shader_alloc_private)(struct wined3d_device *device, const struct wined3d_vertex_pipe_ops *vertex_pipe,
+             const struct wined3d_fragment_pipe_ops *fragment_pipe);
+-- 
+2.43.0
+

@@ -1,0 +1,161 @@
+From e4ae2da0206a0b86aa981a177b87800af5a6649f Mon Sep 17 00:00:00 2001
+From: Grigory Vasilyev <h0tc0d3@gmail.com>
+Date: Sat, 20 Jan 2024 00:27:05 +0300
+Subject: [PATCH 25/27] Add EasyAnticheat
+
+---
+ dlls/kernel32/kernel32.spec     |  2 +-
+ dlls/kernelbase/console.c       |  8 +++++++
+ dlls/kernelbase/kernelbase.spec |  1 +
+ dlls/ntdll/unix/loader.c        | 22 +++++++++++++++++++
+ dlls/ntdll/unix/loadorder.c     | 39 +++++++++++++++++++++++++++++++++
+ 5 files changed, 71 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/kernel32/kernel32.spec b/dlls/kernel32/kernel32.spec
+index 9d5dc076acbd..b83bf986a968 100644
+--- a/dlls/kernel32/kernel32.spec
++++ b/dlls/kernel32/kernel32.spec
+@@ -620,7 +620,7 @@
+ @ stdcall -import GetConsoleProcessList(ptr long)
+ @ stdcall -import GetConsoleScreenBufferInfo(long ptr)
+ @ stdcall -import GetConsoleScreenBufferInfoEx(long ptr)
+-# @ stub GetConsoleSelectionInfo
++@ stdcall -import GetConsoleSelectionInfo(ptr)
+ @ stdcall -import GetConsoleTitleA(ptr long)
+ @ stdcall -import GetConsoleTitleW(ptr long)
+ @ stdcall -import GetConsoleWindow()
+diff --git a/dlls/kernelbase/console.c b/dlls/kernelbase/console.c
+index 4209d2e6991a..f98084798876 100644
+--- a/dlls/kernelbase/console.c
++++ b/dlls/kernelbase/console.c
+@@ -1084,6 +1084,14 @@ DWORD WINAPI DECLSPEC_HOTPATCH GetConsoleTitleA( LPSTR title, DWORD size )
+ }
+ 
+ 
++BOOL WINAPI DECLSPEC_HOTPATCH GetConsoleSelectionInfo(CONSOLE_SELECTION_INFO *info)
++{
++    FIXME("stub (%p)\n", info);
++    info->dwFlags = CONSOLE_NO_SELECTION;
++    return TRUE;
++}
++
++
+ /******************************************************************************
+  *	GetConsoleTitleW   (kernelbase.@)
+  */
+diff --git a/dlls/kernelbase/kernelbase.spec b/dlls/kernelbase/kernelbase.spec
+index d3bd59a78e37..d82228f814e1 100644
+--- a/dlls/kernelbase/kernelbase.spec
++++ b/dlls/kernelbase/kernelbase.spec
+@@ -472,6 +472,7 @@
+ @ stdcall GetConsoleProcessList(ptr long)
+ @ stdcall GetConsoleScreenBufferInfo(long ptr)
+ @ stdcall GetConsoleScreenBufferInfoEx(long ptr)
++@ stdcall GetConsoleSelectionInfo(ptr)
+ @ stdcall GetConsoleTitleA(ptr long)
+ @ stdcall GetConsoleTitleW(ptr long)
+ @ stdcall GetConsoleWindow()
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index e34a988a0f20..1d8bb1c2e6c3 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -339,10 +339,14 @@ static const char *get_pe_dir( WORD machine )
+ static void set_dll_path(void)
+ {
+     char *p, *path = getenv( "WINEDLLPATH" );
++    char *eac_runtime = getenv( "PROTON_EAC_RUNTIME" );
+     int i, count = 0;
+ 
+     if (path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
+ 
++    if (eac_runtime)
++        count += 2;
++
+     dll_paths = malloc( (count + 2) * sizeof(*dll_paths) );
+     count = 0;
+ 
+@@ -355,6 +359,24 @@ static void set_dll_path(void)
+         free( path );
+     }
+ 
++    if (eac_runtime)
++    {
++        const char lib32[] = "/v2/lib32/";
++        const char lib64[] = "/v2/lib64/";
++
++        p = malloc( strlen(eac_runtime) + strlen(lib32) + 1 );
++        strcpy(p, eac_runtime);
++        strcat(p, lib32);
++
++        dll_paths[count++] = p;
++
++        p = malloc( strlen(eac_runtime) + strlen(lib64) + 1 );
++        strcpy(p, eac_runtime);
++        strcat(p, lib64);
++
++        dll_paths[count++] = p;
++    }
++
+     for (i = 0; i < count; i++) dll_path_maxlen = max( dll_path_maxlen, strlen(dll_paths[i]) );
+     dll_paths[count] = NULL;
+ }
+diff --git a/dlls/ntdll/unix/loadorder.c b/dlls/ntdll/unix/loadorder.c
+index aa987a801860..be25b2213d94 100644
+--- a/dlls/ntdll/unix/loadorder.c
++++ b/dlls/ntdll/unix/loadorder.c
+@@ -378,6 +378,10 @@ void set_load_order_app_name( const WCHAR *app_name )
+  */
+ enum loadorder get_load_order( const UNICODE_STRING *nt_name )
+ {
++    static const WCHAR easyanticheat_x86W[] = {'e','a','s','y','a','n','t','i','c','h','e','a','t','_','x','8','6','.','d','l','l',0};
++    static const WCHAR easyanticheat_x64W[] = {'e','a','s','y','a','n','t','i','c','h','e','a','t','_','x','6','4','.','d','l','l',0};
++    static const WCHAR soW[] = {'s','o',0};
++
+     static const WCHAR prefixW[] = {'\\','?','?','\\'};
+     enum loadorder ret = LO_INVALID;
+     const WCHAR *path = nt_name->Buffer;
+@@ -391,6 +395,41 @@ enum loadorder get_load_order( const UNICODE_STRING *nt_name )
+ 
+     TRACE("looking for %s\n", debugstr_w(path));
+ 
++    /* HACK: special logic for easyanticheat bridge: only load the bridge (builtin) if there exists a native version of the library next to the windows version */
++    basename = get_basename((WCHAR *)path);
++    if (!wcsicmp(basename, easyanticheat_x86W) || !wcsicmp(basename, easyanticheat_x64W))
++    {
++        UNICODE_STRING eac_unix_name;
++        OBJECT_ATTRIBUTES attr;
++        char *unix_path = NULL;
++        NTSTATUS status;
++
++        len = wcslen(nt_name->Buffer);
++        eac_unix_name.Buffer = malloc( (len + 1) * sizeof(WCHAR) );
++        wcscpy(eac_unix_name.Buffer, nt_name->Buffer);
++
++        basename = get_basename(eac_unix_name.Buffer);
++        wcscpy(&basename[18], soW);
++        eac_unix_name.Length = eac_unix_name.MaximumLength = wcslen(eac_unix_name.Buffer) * sizeof(WCHAR);
++        InitializeObjectAttributes(&attr, &eac_unix_name, 0, NULL, NULL);
++
++        if (!(status = nt_to_unix_file_name(&attr, &unix_path, FILE_OPEN)))
++        {
++            free(unix_path);
++            free(eac_unix_name.Buffer);
++            ret = LO_BUILTIN;
++            TRACE( "got hardcoded %s for %s, as the eac unix library is present\n", debugstr_loadorder(ret), debugstr_w(path) );
++            return ret;
++        }
++        else
++        {
++            ret = LO_NATIVE;
++            TRACE( "got hardcoded %s for %s, as the eac unix library (%s) is not present. status %x\n", debugstr_loadorder(ret), debugstr_w(path), debugstr_w(eac_unix_name.Buffer), status );
++            free(eac_unix_name.Buffer);
++            return ret;
++        }
++    }
++
+     /* Strip path information if the module resides in the system directory
+      */
+     if (!wcsnicmp( system_dir + 4, path, wcslen(system_dir) - 4 ))
+-- 
+2.43.0
+

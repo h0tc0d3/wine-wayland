@@ -1,0 +1,312 @@
+From a09d7cd9543468cba9c0e37fe0a04061ea2a94b2 Mon Sep 17 00:00:00 2001
+From: Grigory Vasilyev <h0tc0d3@gmail.com>
+Date: Tue, 6 Feb 2024 12:10:33 +0300
+Subject: [PATCH] Rebase patches
+
+---
+ .../0002-gdi32-fix-for-rotated-ellipse.patch  |  2 +-
+ ...t-for-hiding-wine-version-informatio.patch | 22 +++++-----
+ ...dll-Support-x86_64-syscall-emulation.patch | 13 +++---
+ ...ing-of-GetMessage-after-previous-Pee.patch | 44 +++++++++----------
+ 4 files changed, 37 insertions(+), 44 deletions(-)
+
+diff --git a/patches/gdi32-rotation/0002-gdi32-fix-for-rotated-ellipse.patch b/patches/gdi32-rotation/0002-gdi32-fix-for-rotated-ellipse.patch
+index f2900a9ca916..1e63dd9e6948 100644
+--- a/patches/gdi32-rotation/0002-gdi32-fix-for-rotated-ellipse.patch
++++ b/patches/gdi32-rotation/0002-gdi32-fix-for-rotated-ellipse.patch
+@@ -74,7 +74,7 @@ index 3a6f8184009..b5231636261 100644
+ +    }
+ +
+ +    if (pdev->brush.style != BS_NULL &&
+-+        !(interior = ULongToHandle(NtGdiPolyPolyDraw( ULongToHandle(ALTERNATE), points, (const UINT *)&count, 1, NtGdiPolyPolygonRgn ))))
+++        !(interior = ULongToHandle(NtGdiPolyPolyDraw( ULongToHandle(ALTERNATE), points, (const ULONG *)&count, 1, NtGdiPolyPolygonRgn ))))
+ +    {
+ +        free( points );
+ +        if (outline) NtGdiDeleteObjectApp( outline );
+diff --git a/patches/ntdll-Hide_Wine_Exports/0001-ntdll-Add-support-for-hiding-wine-version-informatio.patch b/patches/ntdll-Hide_Wine_Exports/0001-ntdll-Add-support-for-hiding-wine-version-informatio.patch
+index e42ab5d1b8c1..212f1649b9c6 100644
+--- a/patches/ntdll-Hide_Wine_Exports/0001-ntdll-Add-support-for-hiding-wine-version-informatio.patch
++++ b/patches/ntdll-Hide_Wine_Exports/0001-ntdll-Add-support-for-hiding-wine-version-informatio.patch
+@@ -9,13 +9,14 @@ Subject: [PATCH] ntdll: Add support for hiding wine version information from
+  dlls/ntdll/ntdll_misc.h |  5 +++
+  2 files changed, 103 insertions(+), 1 deletion(-)
+ 
++
+ diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+-index 8e2b3282a75..5cb6b48e7ae 100644
++index 2720cdb861d2..ac27367ddb5e 100644
+ --- a/dlls/ntdll/loader.c
+ +++ b/dlls/ntdll/loader.c
+-@@ -88,6 +88,9 @@ const WCHAR system_dir[] = L"C:\\windows\\system32\\";
++@@ -91,6 +91,9 @@ const WCHAR system_dir[] = L"C:\\windows\\system32\\";
+  /* system search path */
+- static const WCHAR system_path[] = L"C:\\windows\\system32;C:\\windows\\system;C:\\windows";
++ static const WCHAR system_path[] = L"C:\\windows\\system32;C:\\windows\\system;C:\\windows;C:\\Program Files (x86)\\Steam";
+  
+ +#define IS_OPTION_TRUE(ch) ((ch) == 'y' || (ch) == 'Y' || (ch) == 't' || (ch) == 'T' || (ch) == '1')
+ +
+@@ -23,7 +24,7 @@ index 8e2b3282a75..5cb6b48e7ae 100644
+  static BOOL is_prefix_bootstrap;  /* are we bootstrapping the prefix? */
+  static BOOL imports_fixup_done = FALSE;  /* set once the imports have been fixed up, before attaching them */
+  static BOOL process_detaching = FALSE;  /* set on process detach to avoid deadlocks with thread detach */
+-@@ -107,6 +110,8 @@ struct dll_dir_entry
++@@ -110,6 +113,8 @@ struct dll_dir_entry
+  
+  static struct list dll_dir_list = LIST_INIT( dll_dir_list );  /* extra dirs from LdrAddDllDirectory */
+  
+@@ -32,7 +33,7 @@ index 8e2b3282a75..5cb6b48e7ae 100644
+  struct ldr_notification
+  {
+      struct list                    entry;
+-@@ -1978,6 +1983,96 @@ NTSTATUS WINAPI LdrUnlockLoaderLock( ULONG flags, ULONG_PTR magic )
++@@ -1999,6 +2004,96 @@ NTSTATUS WINAPI LdrUnlockLoaderLock( ULONG flags, ULONG_PTR magic )
+  }
+  
+  
+@@ -129,7 +130,7 @@ index 8e2b3282a75..5cb6b48e7ae 100644
+  /******************************************************************
+   *		LdrGetProcedureAddress  (NTDLL.@)
+   */
+-@@ -1997,7 +2092,7 @@ NTSTATUS WINAPI LdrGetProcedureAddress(HMODULE module, const ANSI_STRING *name,
++@@ -2019,7 +2114,7 @@ NTSTATUS WINAPI LdrGetProcedureAddress(HMODULE module, const ANSI_STRING *name,
+      {
+          void *proc = name ? find_named_export( module, exports, exp_size, name->Buffer, -1, NULL )
+                            : find_ordinal_export( module, exports, exp_size, ord - exports->Base, NULL );
+@@ -138,7 +139,7 @@ index 8e2b3282a75..5cb6b48e7ae 100644
+          {
+              *address = proc;
+              ret = STATUS_SUCCESS;
+-@@ -2235,6 +2330,8 @@ static void build_ntdll_module( HMODULE module )
++@@ -2299,6 +2394,8 @@ static void build_ntdll_module(void)
+      wm->ldr.Flags &= ~LDR_DONT_RESOLVE_REFS;
+      node_ntdll = wm->ldr.DdagNode;
+      if (TRACE_ON(relay)) RELAY_SetupDLL( module );
+@@ -148,10 +149,10 @@ index 8e2b3282a75..5cb6b48e7ae 100644
+  
+  
+ diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+-index 8801c518039..78ff79625ea 100644
++index a7967a6c2429..f445500963f9 100644
+ --- a/dlls/ntdll/ntdll_misc.h
+ +++ b/dlls/ntdll/ntdll_misc.h
+-@@ -153,6 +153,11 @@ static inline TEB64 *NtCurrentTeb64(void) { return (TEB64 *)NtCurrentTeb()->GdiB
++@@ -121,6 +121,11 @@ static inline TEB64 *NtCurrentTeb64(void) { return (TEB64 *)NtCurrentTeb()->GdiB
+  
+  NTSTATUS WINAPI RtlHashUnicodeString(PCUNICODE_STRING,BOOLEAN,ULONG,ULONG*);
+  
+@@ -163,6 +164,3 @@ index 8801c518039..78ff79625ea 100644
+  /* convert from straight ASCII to Unicode without depending on the current codepage */
+  static inline void ascii_to_unicode( WCHAR *dst, const char *src, size_t len )
+  {
+--- 
+-2.38.1
+-
+diff --git a/patches/ntdll-Syscall_Emulation/0001-ntdll-Support-x86_64-syscall-emulation.patch b/patches/ntdll-Syscall_Emulation/0001-ntdll-Support-x86_64-syscall-emulation.patch
+index 05c7c9dc6e63..448382479690 100644
+--- a/patches/ntdll-Syscall_Emulation/0001-ntdll-Support-x86_64-syscall-emulation.patch
++++ b/patches/ntdll-Syscall_Emulation/0001-ntdll-Support-x86_64-syscall-emulation.patch
+@@ -9,19 +9,19 @@ Subject: [PATCH] ntdll: Support x86_64 syscall emulation.
+  2 files changed, 193 insertions(+)
+ 
+ diff --git a/configure.ac b/configure.ac
+-index bd655accac3..d581dbc1eae 100644
++index 71c5b06fc26d..96646c28fc5d 100644
+ --- a/configure.ac
+ +++ b/configure.ac
+-@@ -420,6 +420,7 @@ AC_CHECK_HEADERS(\
+- 	linux/ioctl.h \
++@@ -431,6 +431,7 @@ AC_CHECK_HEADERS(\
+  	linux/major.h \
++ 	linux/ntsync.h \
+  	linux/param.h \
+ +	linux/seccomp.h \
+  	linux/serial.h \
+  	linux/types.h \
+  	linux/ucdrom.h \
+ diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
+-index 0c291633ac6..a28762915be 100644
++index ae100e05e63a..ac5a41f1963c 100644
+ --- a/dlls/ntdll/unix/signal_x86_64.c
+ +++ b/dlls/ntdll/unix/signal_x86_64.c
+ @@ -27,6 +27,7 @@
+@@ -243,7 +243,7 @@ index 0c291633ac6..a28762915be 100644
+  
+  /***********************************************************************
+   *           handle_interrupt
+-@@ -2460,6 +2651,7 @@ void signal_init_process(void)
++@@ -2467,6 +2658,7 @@ void signal_init_process(void)
+      if (sigaction( SIGSEGV, &sig_act, NULL ) == -1) goto error;
+      if (sigaction( SIGILL, &sig_act, NULL ) == -1) goto error;
+      if (sigaction( SIGBUS, &sig_act, NULL ) == -1) goto error;
+@@ -251,6 +251,3 @@ index 0c291633ac6..a28762915be 100644
+      return;
+  
+   error:
+--- 
+-2.43.0
+-
+diff --git a/patches/server-PeekMessage/0001-server-Fix-handling-of-GetMessage-after-previous-Pee.patch b/patches/server-PeekMessage/0001-server-Fix-handling-of-GetMessage-after-previous-Pee.patch
+index 93a8aeef32d3..6fd96022b4ab 100644
+--- a/patches/server-PeekMessage/0001-server-Fix-handling-of-GetMessage-after-previous-Pee.patch
++++ b/patches/server-PeekMessage/0001-server-Fix-handling-of-GetMessage-after-previous-Pee.patch
+@@ -15,7 +15,7 @@ Changes in v3:
+  2 files changed, 65 insertions(+), 17 deletions(-)
+ 
+ diff --git a/dlls/user32/tests/msg.c b/dlls/user32/tests/msg.c
+-index 0059afcbac7..cf01e156458 100644
++index bb7b74558c43..5fc8a89900c1 100644
+ --- a/dlls/user32/tests/msg.c
+ +++ b/dlls/user32/tests/msg.c
+ @@ -14113,13 +14113,10 @@ static void test_PeekMessage3(void)
+@@ -93,26 +93,26 @@ index 0059afcbac7..cf01e156458 100644
+       * because both messages are in the same queue. */
+  
+ diff --git a/server/queue.c b/server/queue.c
+-index 9007438e082..1d7a31a318a 100644
++index 7afa1dce898a..2e039abafab3 100644
+ --- a/server/queue.c
+ +++ b/server/queue.c
+-@@ -142,6 +142,7 @@ struct msg_queue
+-     struct hook_table     *hooks;           /* hook table */
+-     timeout_t              last_get_msg;    /* time of last get message call */
++@@ -144,6 +144,7 @@ struct msg_queue
+      int                    keystate_lock;   /* owns an input keystate lock */
++     struct fast_sync      *fast_sync;       /* fast synchronization object */
++     int                    in_fast_wait;    /* are we in a client-side wait? */
+ +    unsigned int           ignore_post_msg; /* ignore post messages newer than this unique id */
+  };
+  
+  struct hotkey
+-@@ -310,6 +311,7 @@ static struct msg_queue *create_msg_queue( struct thread *thread, struct thread_
+-         queue->hooks           = NULL;
+-         queue->last_get_msg    = current_time;
++@@ -317,6 +318,7 @@ static struct msg_queue *create_msg_queue( struct thread *thread, struct thread_
+          queue->keystate_lock   = 0;
++         queue->fast_sync       = NULL;
++         queue->in_fast_wait    = 0;
+ +        queue->ignore_post_msg = 0;
+          list_init( &queue->send_result );
+          list_init( &queue->callback_result );
+          list_init( &queue->pending_timers );
+-@@ -643,13 +645,21 @@ static inline struct msg_queue *get_current_queue(void)
++@@ -660,13 +662,21 @@ static inline struct msg_queue *get_current_queue(void)
+  }
+  
+  /* get a (pseudo-)unique id to tag hardware messages */
+@@ -135,7 +135,7 @@ index 9007438e082..1d7a31a318a 100644
+  /* try to merge a WM_MOUSEMOVE message with the last in the list; return 1 if successful */
+  static int merge_mousemove( struct thread_input *input, const struct message *msg )
+  {
+-@@ -960,7 +970,7 @@ static int match_window( user_handle_t win, user_handle_t msg_win )
++@@ -977,7 +987,7 @@ static int match_window( user_handle_t win, user_handle_t msg_win )
+  }
+  
+  /* retrieve a posted message */
+@@ -144,7 +144,7 @@ index 9007438e082..1d7a31a318a 100644
+                                 unsigned int first, unsigned int last, unsigned int flags,
+                                 struct get_message_reply *reply )
+  {
+-@@ -971,6 +981,7 @@ static int get_posted_message( struct msg_queue *queue, user_handle_t win,
++@@ -988,6 +998,7 @@ static int get_posted_message( struct msg_queue *queue, user_handle_t win,
+      {
+          if (!match_window( win, msg->win )) continue;
+          if (!check_msg_filter( msg->msg, first, last )) continue;
+@@ -152,7 +152,7 @@ index 9007438e082..1d7a31a318a 100644
+          goto found; /* found one */
+      }
+      return 0;
+-@@ -1585,6 +1596,7 @@ found:
++@@ -1619,6 +1630,7 @@ found:
+      msg->msg       = WM_HOTKEY;
+      msg->wparam    = hotkey->id;
+      msg->lparam    = ((hotkey->vkey & 0xffff) << 16) | modifiers;
+@@ -160,7 +160,7 @@ index 9007438e082..1d7a31a318a 100644
+  
+      free( msg->data );
+      msg->data      = NULL;
+-@@ -2276,7 +2288,7 @@ static int get_hardware_message( struct thread *thread, unsigned int hw_id, user
++@@ -2316,7 +2328,7 @@ static int get_hardware_message( struct thread *thread, unsigned int hw_id, user
+          }
+  
+          /* now we can return it */
+@@ -169,7 +169,7 @@ index 9007438e082..1d7a31a318a 100644
+          reply->type   = MSG_HARDWARE;
+          reply->win    = win;
+          reply->msg    = msg_code;
+-@@ -2382,6 +2394,7 @@ void post_message( user_handle_t win, unsigned int message, lparam_t wparam, lpa
++@@ -2423,6 +2435,7 @@ void post_message( user_handle_t win, unsigned int message, lparam_t wparam, lpa
+          msg->result    = NULL;
+          msg->data      = NULL;
+          msg->data_size = 0;
+@@ -177,7 +177,7 @@ index 9007438e082..1d7a31a318a 100644
+  
+          get_message_defaults( thread->queue, &msg->x, &msg->y, &msg->time );
+  
+-@@ -2626,6 +2639,7 @@ DECL_HANDLER(send_message)
++@@ -2681,6 +2694,7 @@ DECL_HANDLER(send_message)
+              set_queue_bits( recv_queue, QS_SENDMESSAGE );
+              break;
+          case MSG_POSTED:
+@@ -185,7 +185,7 @@ index 9007438e082..1d7a31a318a 100644
+              list_add_tail( &recv_queue->msg_list[POST_MESSAGE], &msg->entry );
+              set_queue_bits( recv_queue, QS_POSTMESSAGE|QS_ALLPOSTMESSAGE );
+              if (msg->msg == WM_HOTKEY)
+-@@ -2744,12 +2758,12 @@ DECL_HANDLER(get_message)
++@@ -2802,12 +2816,12 @@ DECL_HANDLER(get_message)
+  
+      /* then check for posted messages */
+      if ((filter & QS_POSTMESSAGE) &&
+@@ -200,7 +200,7 @@ index 9007438e082..1d7a31a318a 100644
+          return;
+  
+      /* only check for quit messages if not posted messages pending */
+-@@ -2760,7 +2774,7 @@ DECL_HANDLER(get_message)
++@@ -2818,7 +2832,7 @@ DECL_HANDLER(get_message)
+      if ((filter & QS_INPUT) &&
+          filter_contains_hw_range( req->get_first, req->get_last ) &&
+          get_hardware_message( current, req->hw_id, get_win, req->get_first, req->get_last, req->flags, reply ))
+@@ -209,7 +209,7 @@ index 9007438e082..1d7a31a318a 100644
+  
+      /* check for any internal driver message */
+      if (get_hardware_message( current, req->hw_id, get_win, WM_WINE_FIRST_DRIVER_MSG,
+-@@ -2778,7 +2792,7 @@ DECL_HANDLER(get_message)
++@@ -2836,7 +2850,7 @@ DECL_HANDLER(get_message)
+          reply->wparam = 0;
+          reply->lparam = 0;
+          get_message_defaults( queue, &reply->x, &reply->y, &reply->time );
+@@ -218,7 +218,7 @@ index 9007438e082..1d7a31a318a 100644
+      }
+  
+      /* now check for timer */
+-@@ -2794,13 +2808,30 @@ DECL_HANDLER(get_message)
++@@ -2852,14 +2866,31 @@ DECL_HANDLER(get_message)
+          get_message_defaults( queue, &reply->x, &reply->y, &reply->time );
+          if (!(req->flags & PM_NOYIELD) && current->process->idle_event)
+              set_event( current->process->idle_event );
+@@ -239,6 +239,7 @@ index 9007438e082..1d7a31a318a 100644
+      if (get_win == -1 && current->process->idle_event) set_event( current->process->idle_event );
+      queue->wake_mask = req->wake_mask;
+      queue->changed_mask = req->changed_mask;
++     fast_reset_event( queue->fast_sync );
+      set_error( STATUS_PENDING );  /* FIXME */
+ +    return;
+ +
+@@ -250,7 +251,7 @@ index 9007438e082..1d7a31a318a 100644
+  }
+  
+  
+-@@ -2818,7 +2849,10 @@ DECL_HANDLER(reply_message)
++@@ -2877,7 +2908,10 @@ DECL_HANDLER(reply_message)
+  DECL_HANDLER(accept_hardware_message)
+  {
+      if (current->queue)
+@@ -261,6 +262,3 @@ index 9007438e082..1d7a31a318a 100644
+      else
+          set_error( STATUS_ACCESS_DENIED );
+  }
+--- 
+-2.43.0
+-
+-- 
+2.43.0
+
